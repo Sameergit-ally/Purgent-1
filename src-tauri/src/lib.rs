@@ -61,6 +61,7 @@ struct ReportMeta {
     standard_label: String,
     verified: bool,
     has_pdf: bool,
+    capacity_bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -275,6 +276,7 @@ fn list_reports(state: State<'_, AppState>) -> Result<Vec<ReportMeta>, String> {
             standard_label: row.standard_label,
             verified,
             has_pdf: pdf_ok,
+            capacity_bytes: row.capacity_bytes,
         });
     }
     Ok(metas)
