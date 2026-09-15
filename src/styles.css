@@ -172,8 +172,16 @@ body {
 
 .sb-brand {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.sb-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
 }
 
 .sb-title {

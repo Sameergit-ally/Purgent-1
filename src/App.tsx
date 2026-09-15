@@ -5,6 +5,7 @@ import { Navbar } from "./components/ui/navbar";
 import { LandingPage } from "./components/ui/landing-page";
 import ConstellationGrid from "./components/ui/constellation-grid";
 import { ArrowLeft, RefreshCw } from "lucide-react";
+import logoImg from "./assets/logo.png";
 
 interface Device {
   id: string;
@@ -626,6 +627,7 @@ function App() {
           <main className="dashboard pt-6">
             <section className="statusbar">
               <div className="sb-brand">
+                <img src={logoImg} alt="Purgent logo" className="sb-logo" />
                 <span className="sb-title">PURGENT</span>
                 <span className="sb-sub">TACTICAL FORENSIC CONSOLE</span>
               </div>

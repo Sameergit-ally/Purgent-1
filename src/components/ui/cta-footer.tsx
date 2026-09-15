@@ -1,4 +1,4 @@
-import { Shield } from "lucide-react";
+import logoImg from "../../assets/logo.png";
 import ConstellationGrid from "./constellation-grid";
 
 interface CtaFooterProps {
@@ -57,8 +57,8 @@ export function CtaFooter({ onOpenConsole }: CtaFooterProps) {
             {/* Brand column (5 cols) */}
             <div className="md:col-span-5 space-y-4">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl neu-pill flex items-center justify-center text-[#38BDF8]">
-                  <Shield className="w-5 h-5 drop-shadow-[0_0_6px_rgba(56,189,248,0.5)]" />
+                <div className="w-9 h-9 rounded-xl overflow-hidden ring-1 ring-[#1E2D4A] bg-[#0B111E] flex items-center justify-center">
+                  <img src={logoImg} alt="Purgent logo" className="w-full h-full object-cover" />
                 </div>
                 <span className="font-serif text-xl font-bold text-white">
                   Purgent

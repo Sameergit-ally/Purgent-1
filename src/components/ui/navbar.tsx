@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Menu, X, Shield, Terminal } from "lucide-react";
+import { Menu, X, Terminal } from "lucide-react";
+import logoImg from "../../assets/logo.png";
 
 interface NavbarProps {
   onOpenConsole?: () => void;
@@ -46,8 +47,12 @@ export function Navbar({ onOpenConsole, onNavigateSection }: NavbarProps) {
           href="#"
           className="flex items-center gap-3.5 group text-decoration-none focus:outline-none"
         >
-          <div className="w-10 h-10 rounded-xl neu-pill flex items-center justify-center text-[#38BDF8] group-hover:text-[#FFFFFF] transition-colors">
-            <Shield className="w-5 h-5 drop-shadow-[0_0_8px_rgba(56,189,248,0.5)]" />
+          <div className="w-10 h-10 rounded-xl overflow-hidden ring-1 ring-[#1E2D4A] bg-[#0B111E] flex items-center justify-center">
+            <img
+              src={logoImg}
+              alt="Purgent logo"
+              className="w-full h-full object-cover"
+            />
           </div>
           <div className="flex flex-col">
             <span className="font-serif font-bold text-xl tracking-tight text-white leading-none">
