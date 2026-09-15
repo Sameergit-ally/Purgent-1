@@ -166,6 +166,7 @@ fn wipe_image(
         standard,
         operator_confirmed_target: confirmed,
         block_size: None,
+        fallback_acknowledged: false,
     };
     let outcome_code = spawn_wipe(app, state, request);
     Ok(outcome_code)
@@ -177,16 +178,20 @@ fn wipe_device(
     state: State<'_, AppState>,
     device_path: String,
     capacity_bytes: u64,
+    media_type_id: String,
     standard_id: String,
+    fallback_acknowledged: bool,
     confirmed: String,
 ) -> Result<String, String> {
     if !looks_like_block_device(&device_path) {
         return Err("refusing to wipe anything but a block device path".into());
     }
     let standard = parse_wipe_standard(&standard_id)?;
+    let media_type = purgent_core::modules::storage::parse_media_type(&media_type_id)?;
     let target = WipeTarget::Device {
         path: device_path.clone(),
         capacity_bytes,
+        media_type,
     };
     let request = WipeRequest {
         operator_id: state.operator_id.read().unwrap().clone(),
@@ -194,6 +199,7 @@ fn wipe_device(
         standard,
         operator_confirmed_target: confirmed,
         block_size: None,
+        fallback_acknowledged,
     };
     let code = spawn_wipe(app, state, request);
     Ok(code)
@@ -305,6 +311,31 @@ fn open_report_pdf(state: State<'_, AppState>, filename: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn export_report_xml(state: State<'_, AppState>, filename: String) -> Result<String, String> {
+    let report_id = report_id_from_filename(&filename)?;
+    let db = state.open_db()?;
+    let stored = db.report_json(&report_id).map_err(|e| e.to_string())?;
+    let report: Report = serde_json::from_str(&stored).map_err(|e| e.to_string())?;
+    let xml = purgent_core::modules::reporting::export_xml(&report);
+    let xml_path = purgent_core::modules::reporting::save_report_xml(&report, &state.report_dir)
+        .map_err(|e| e.to_string())?;
+    let _ = xml;
+    Ok(xml_path.display().to_string())
+}
+
+#[tauri::command]
+fn open_report_xml(state: State<'_, AppState>, filename: String) -> Result<(), String> {
+    let report_id = report_id_from_filename(&filename)?;
+    let db = state.open_db()?;
+    let stored = db.report_json(&report_id).map_err(|e| e.to_string())?;
+    let report: Report = serde_json::from_str(&stored).map_err(|e| e.to_string())?;
+    let xml_path = purgent_core::modules::reporting::save_report_xml(&report, &state.report_dir)
+        .map_err(|e| e.to_string())?;
+    open_with_default_app(&xml_path);
+    Ok(())
+}
+
+#[tauri::command]
 fn get_sync_status(state: State<'_, AppState>) -> Result<SyncStatus, String> {
     let enabled = *state.sync_enabled.read().unwrap();
     let configured = state.sync_config.is_some();
@@ -406,6 +437,10 @@ fn wipe_standard_id(s: WipeStandard) -> &'static str {
         WipeStandard::Nist800_88Clear => "nist_800_88_clear",
         WipeStandard::Nist800_88Purge => "nist_800_88_purge",
         WipeStandard::Dod522022M => "dod_522022_m",
+        WipeStandard::Ieee2883Purge => "ieee_2883_purge",
+        WipeStandard::Iso27037Capture => "iso_27037_capture",
+        WipeStandard::AtaSecureErase => "ata_secure_erase",
+        WipeStandard::NvmeSanitize => "nvme_sanitize",
     }
 }
 
@@ -421,6 +456,10 @@ fn parse_wipe_standard(id: &str) -> Result<WipeStandard, String> {
         "nist_800_88_clear" => Ok(WipeStandard::Nist800_88Clear),
         "nist_800_88_purge" => Ok(WipeStandard::Nist800_88Purge),
         "dod_522022_m" => Ok(WipeStandard::Dod522022M),
+        "ieee_2883_purge" => Ok(WipeStandard::Ieee2883Purge),
+        "iso_27037_capture" => Ok(WipeStandard::Iso27037Capture),
+        "ata_secure_erase" => Ok(WipeStandard::AtaSecureErase),
+        "nvme_sanitize" => Ok(WipeStandard::NvmeSanitize),
         _ => Err(format!("unknown wipe standard '{id}'")),
     }
 }
@@ -699,6 +738,8 @@ pub fn run() {
             list_reports,
             read_report,
             open_report_pdf,
+            export_report_xml,
+            open_report_xml,
             get_sync_status,
             set_sync_enabled,
             sync_now,

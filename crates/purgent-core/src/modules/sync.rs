@@ -125,12 +125,23 @@ impl AuditSyncClient {
             "capacity_bytes": report.capacity_bytes,
             "start_time": report.start_time,
             "finish_time": report.finish_time,
-            "verification_status": match serde_json::to_value(&report.verification.status) {
-                Ok(v) => v.as_str().map(|s| s.to_string()).unwrap_or_default(),
-                Err(_) => String::new(),
+            "verification_status": match report.verification.as_ref() {
+                Some(v) => serde_json::to_value(v.status)
+                    .ok()
+                    .and_then(|x| x.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default(),
+                None => String::new(),
             },
-            "verification_detail": report.verification.detail,
-            "mismatched_sectors": report.verification.mismatched_sectors,
+            "verification_detail": report
+                .verification
+                .as_ref()
+                .map(|v| v.detail.clone())
+                .unwrap_or_default(),
+            "mismatched_sectors": report
+                .verification
+                .as_ref()
+                .map(|v| v.mismatched_sectors)
+                .unwrap_or(0),
             "skipped_sector_count": report.skipped_sector_count,
             "report_hash": report.report_hash,
             "signature_alg": report.signature_alg,
@@ -210,6 +221,11 @@ mod tests {
             }),
             skipped_sectors: vec![],
             complete: true,
+            method: crate::modules::config::WipeMethod::Overwrite,
+            hpa_dco: None,
+            hpa_dco_removal: None,
+            evidence_hash: None,
+            fallback_reason: None,
         };
         result.operation_id = format!("{report_id}-op");
         let mut report = build_wipe_report(&result, TEST_KEY);

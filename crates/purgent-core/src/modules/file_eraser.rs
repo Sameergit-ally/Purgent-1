@@ -101,6 +101,7 @@ pub struct FileEraseResult {
     pub files: Vec<EraseFileRecord>,
     pub directories_removed: u64,
     pub complete: bool,
+    pub trace_scrub: Option<super::trace_scrubber::TraceScrubRecord>,
 }
 
 impl FileEraseResult {
@@ -162,6 +163,7 @@ pub fn erase_with_progress(
         files: Vec::new(),
         directories_removed: 0,
         complete: false,
+        trace_scrub: None,
     };
 
     let job_files: Vec<PathBuf> = match &request.target {
@@ -209,6 +211,10 @@ pub fn erase_with_progress(
     let finished_at = log::now_utc_rfc3339();
     result.finished_at = finished_at.clone();
     result.complete = result.all_verified_and_deleted();
+    result.trace_scrub = Some(super::trace_scrubber::scrub_trace(&match &request.target {
+        EraseTarget::SingleFile(path) => path.clone(),
+        EraseTarget::Folder(path) => path.clone(),
+    }));
     log::log(
         if result.complete {
             "verified"
@@ -216,10 +222,20 @@ pub fn erase_with_progress(
             "failed"
         },
         &format!(
-            "operation={} files={} complete={}",
+            "operation={} files={} complete={} trace_scrub_ok={} trace_scrub_best_effort={}",
             result.operation_id,
             result.files.len(),
-            result.complete
+            result.complete,
+            result
+                .trace_scrub
+                .as_ref()
+                .map(|t| t.ok_count())
+                .unwrap_or(0),
+            result
+                .trace_scrub
+                .as_ref()
+                .map(|t| t.best_effort_count())
+                .unwrap_or(0)
         ),
     );
     log::log(

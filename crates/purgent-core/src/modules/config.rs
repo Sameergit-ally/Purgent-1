@@ -24,6 +24,10 @@ pub enum WipeStandard {
     Nist800_88Clear,
     Nist800_88Purge,
     Dod522022M,
+    Ieee2883Purge,
+    Iso27037Capture,
+    AtaSecureErase,
+    NvmeSanitize,
 }
 
 impl WipeStandard {
@@ -32,6 +36,35 @@ impl WipeStandard {
             WipeStandard::Nist800_88Clear => "NIST SP 800-88 Rev.1 Clear",
             WipeStandard::Nist800_88Purge => "NIST SP 800-88 Rev.1 Purge",
             WipeStandard::Dod522022M => "DoD 5220.22-M",
+            WipeStandard::Ieee2883Purge => "IEEE 2883-2022 Purge",
+            WipeStandard::Iso27037Capture => "ISO/IEC 27037 Evidence Handling",
+            WipeStandard::AtaSecureErase => "ATA Secure Erase (in-band)",
+            WipeStandard::NvmeSanitize => "NVMe Sanitize - Crypto Erase (in-band)",
+        }
+    }
+
+    pub fn is_hardware_method(self) -> bool {
+        matches!(
+            self,
+            WipeStandard::AtaSecureErase | WipeStandard::NvmeSanitize
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WipeMethod {
+    Overwrite,
+    AtaSecureErase,
+    NvmeSanitize,
+}
+
+impl WipeMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            WipeMethod::Overwrite => "overwrite",
+            WipeMethod::AtaSecureErase => "ata_secure_erase",
+            WipeMethod::NvmeSanitize => "nvme_sanitize",
         }
     }
 }
@@ -39,8 +72,10 @@ impl WipeStandard {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WipeSpec {
     pub standard: WipeStandard,
+    pub method: WipeMethod,
     pub passes: Vec<PassPattern>,
     pub verify_after: bool,
+    pub capture_evidence_before: bool,
     pub seed: u64,
 }
 
@@ -54,24 +89,62 @@ pub fn supported_wipe_standards() -> &'static [WipeSpec] {
             vec![
                 WipeSpec {
                     standard: WipeStandard::Nist800_88Clear,
+                    method: WipeMethod::Overwrite,
                     passes: vec![PassPattern::Zeros],
                     verify_after: true,
+                    capture_evidence_before: false,
                     seed: RANDOM_SEED,
                 },
                 WipeSpec {
                     standard: WipeStandard::Nist800_88Purge,
+                    method: WipeMethod::Overwrite,
                     passes: vec![PassPattern::Zeros],
                     verify_after: true,
+                    capture_evidence_before: false,
                     seed: RANDOM_SEED,
                 },
                 WipeSpec {
                     standard: WipeStandard::Dod522022M,
+                    method: WipeMethod::Overwrite,
                     passes: vec![
                         PassPattern::Zeros,
                         PassPattern::Ones,
                         PassPattern::SeededRandom,
                     ],
                     verify_after: true,
+                    capture_evidence_before: false,
+                    seed: RANDOM_SEED,
+                },
+                WipeSpec {
+                    standard: WipeStandard::Ieee2883Purge,
+                    method: WipeMethod::Overwrite,
+                    passes: vec![PassPattern::SeededRandom],
+                    verify_after: true,
+                    capture_evidence_before: false,
+                    seed: RANDOM_SEED,
+                },
+                WipeSpec {
+                    standard: WipeStandard::Iso27037Capture,
+                    method: WipeMethod::Overwrite,
+                    passes: vec![PassPattern::SeededRandom],
+                    verify_after: true,
+                    capture_evidence_before: true,
+                    seed: RANDOM_SEED,
+                },
+                WipeSpec {
+                    standard: WipeStandard::AtaSecureErase,
+                    method: WipeMethod::AtaSecureErase,
+                    passes: vec![PassPattern::SeededRandom],
+                    verify_after: true,
+                    capture_evidence_before: false,
+                    seed: RANDOM_SEED,
+                },
+                WipeSpec {
+                    standard: WipeStandard::NvmeSanitize,
+                    method: WipeMethod::NvmeSanitize,
+                    passes: vec![PassPattern::SeededRandom],
+                    verify_after: true,
+                    capture_evidence_before: false,
                     seed: RANDOM_SEED,
                 },
             ]
@@ -87,12 +160,31 @@ pub fn wipe_spec(standard: WipeStandard) -> WipeSpec {
         .expect("supported wipe standard is present")
 }
 
+/// Overwrite profile used when a hardware method (ATA Secure Erase / NVMe Sanitize)
+/// is requested but unavailable and the operator has explicitly acknowledged the
+/// fallback. Per RULES this fallback is never silent.
+pub fn fallback_wipe_spec(standard: WipeStandard) -> WipeSpec {
+    if standard.is_hardware_method() {
+        WipeSpec {
+            standard,
+            method: WipeMethod::Overwrite,
+            passes: vec![PassPattern::SeededRandom],
+            verify_after: true,
+            capture_evidence_before: false,
+            seed: RANDOM_SEED,
+        }
+    } else {
+        wipe_spec(standard)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureEnd {
     Terminator(&'static [u8]),
     ByteTerminator(u8),
     FixedSize { size_offset: usize },
     ZipEocd,
+    Mp4Moov,
     TrailingEof,
 }
 
@@ -153,6 +245,24 @@ pub fn signature_database() -> &'static [FileSignature] {
             magic_offset: 0,
             end: SignatureEnd::TrailingEof,
             max_carve_size: 256 * 1024 * 1024,
+        },
+        FileSignature {
+            id: "mp4",
+            extension: "mp4",
+            mime: "video/mp4",
+            magic: b"ftyp",
+            magic_offset: 4,
+            end: SignatureEnd::Mp4Moov,
+            max_carve_size: 512 * 1024 * 1024,
+        },
+        FileSignature {
+            id: "docx",
+            extension: "docx",
+            mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            magic: b"PK\x03\x04",
+            magic_offset: 0,
+            end: SignatureEnd::ZipEocd,
+            max_carve_size: 512 * 1024 * 1024,
         },
         FileSignature {
             id: "zip",

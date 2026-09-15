@@ -4,6 +4,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
+use super::classification::{classify, FileCategory};
 use super::config::{signature_database, FileSignature, SignatureEnd};
 use super::hashing::sha256_hex;
 use super::log;
@@ -28,6 +29,7 @@ pub struct RecoveredFile {
     pub signature: String,
     pub extension: String,
     pub mime: String,
+    pub category: FileCategory,
     pub output_path: String,
     pub size_bytes: u64,
     pub source_offset: u64,
@@ -96,7 +98,8 @@ pub fn carve_source_with_progress(
             break;
         };
         consumed_until = end;
-        if end - offset < MIN_CARVE_SIZE {
+        let carve_start = offset.saturating_sub(sig.magic_offset as u64);
+        if end - carve_start < MIN_CARVE_SIZE {
             if sig.id == "jpeg" {
                 if let Some((content, gap_bytes, fragment_end)) =
                     recover_fragmented_jpeg(&mut file, offset, source_len, sig.max_carve_size)?
@@ -134,13 +137,13 @@ pub fn carve_source_with_progress(
             });
             continue;
         }
-        let content = read_range(&mut file, offset, end - offset)?;
+        let content = read_range(&mut file, carve_start, end - carve_start)?;
         let recovered = write_recovered(
             &mut file,
             sig,
-            offset,
+            carve_start,
             content,
-            end - offset,
+            end - carve_start,
             false,
             0,
             &mut files,
@@ -295,7 +298,7 @@ fn resolve_end(
         SignatureEnd::ZipEocd => {
             let marker = b"PK\x05\x06";
             Ok(
-                search_forward(file, start, limit, marker, false)?.map(|eocd| {
+                search_forward(file, start, limit, marker, true)?.map(|eocd| {
                     let mut tail = [0u8; 2];
                     file.seek(SeekFrom::Start(eocd + 20)).ok();
                     let _ = file.read_exact(&mut tail);
@@ -304,10 +307,53 @@ fn resolve_end(
                 }),
             )
         }
+        SignatureEnd::Mp4Moov => mp4_moov_end(file, start, limit),
         SignatureEnd::TrailingEof => {
             let marker = b"%%EOF";
             Ok(search_forward(file, start, limit, marker, false)?.map(|p| p + marker.len() as u64))
         }
+    }
+}
+
+/// Walks top-level ISO BMFF boxes from `start` (the position of the `ftyp` magic,
+/// which is 4 bytes into the containing box) and returns the end offset of the
+/// `moov` box when found. Without a `moov` box the fragment cannot be a complete
+/// MP4, so `None` is returned (the caller advances past the signature only).
+fn mp4_moov_end(file: &mut File, start: u64, limit: u64) -> Result<Option<u64>, CarveError> {
+    // `ftyp` occupies bytes 4..8 of its box; the size prefix is at start - 4.
+    let mut box_pos = start.saturating_sub(4);
+    let mut header = [0u8; 16];
+    loop {
+        file.seek(SeekFrom::Start(box_pos))
+            .map_err(|e| CarveError::Io(e.to_string()))?;
+        let got = file
+            .read(&mut header)
+            .map_err(|e| CarveError::Io(e.to_string()))?;
+        if got < 8 {
+            return Ok(None);
+        }
+        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        let box_type = [header[4], header[5], header[6], header[7]];
+        let end = if size32 == 1 {
+            // 64-bit extended size; header is 16 bytes.
+            if got < 16 {
+                return Ok(None);
+            }
+            let size64 = u64::from_be_bytes(header[8..16].try_into().expect("16 bytes"));
+            box_pos.saturating_add(size64)
+        } else if size32 == 0 {
+            // Box extends to end of file; stop walking.
+            return Ok(None);
+        } else {
+            box_pos.saturating_add(size32)
+        };
+        if &box_type == b"moov" {
+            return Ok(Some(end.min(limit)));
+        }
+        if end <= box_pos || end > limit {
+            return Ok(None);
+        }
+        box_pos = end;
     }
 }
 
@@ -342,9 +388,22 @@ fn write_recovered(
     output_dir: &Path,
 ) -> Result<RecoveredFile, CarveError> {
     let _ = file;
-    let structure_valid = validate_structure(sig.id, &content);
+    let effective_id = if sig.id == "docx" && !docx_structure_valid(&content) {
+        "zip"
+    } else {
+        sig.id
+    };
+    let effective_sig = if effective_id == sig.id {
+        sig
+    } else {
+        signature_database()
+            .iter()
+            .find(|s| s.id == effective_id)
+            .expect("zip signature is present")
+    };
+    let structure_valid = validate_structure(effective_id, &content);
     let (confidence, score_factors) = score(
-        sig.id,
+        effective_id,
         structure_valid,
         fragment_reconstructed,
         content.len() as u64 == size_bytes,
@@ -352,10 +411,10 @@ fn write_recovered(
     let recovered_at = log::now_utc_rfc3339();
     let filename = format!(
         "found_{}_{}_{}.{}",
-        sig.id,
+        effective_id,
         offset,
         files.len() + 1,
-        sig.extension
+        effective_sig.extension
     );
     let out_path = output_dir.join(&filename);
     let hash = sha256_hex(&content);
@@ -366,9 +425,10 @@ fn write_recovered(
             .map_err(|e| CarveError::Destination(e.to_string()))?;
     }
     let recovered = RecoveredFile {
-        signature: sig.id.to_string(),
-        extension: sig.extension.to_string(),
-        mime: sig.mime.to_string(),
+        signature: effective_id.to_string(),
+        extension: effective_sig.extension.to_string(),
+        mime: effective_sig.mime.to_string(),
+        category: classify(effective_id, effective_sig.mime),
         output_path: out_path.display().to_string(),
         size_bytes,
         source_offset: offset,
@@ -392,8 +452,87 @@ fn validate_structure(id: &str, data: &[u8]) -> bool {
         "bmp" => bmp_structure_valid(data),
         "pdf" => pdf_structure_valid(data),
         "zip" => zip_structure_valid(data),
+        "docx" => docx_structure_valid(data),
+        "mp4" => mp4_structure_valid(data),
         _ => false,
     }
+}
+
+/// Validates an ISO BMFF container: a complete, walkable box chain that includes a
+/// `moov` and a `mdat` box. Mirrors `mp4_moov_end` but operates on an in-memory
+/// buffer for scored validation.
+pub fn mp4_structure_valid(data: &[u8]) -> bool {
+    if data.len() < 8 {
+        return false;
+    }
+    let mut box_pos = 0usize;
+    let mut saw_moov = false;
+    let mut saw_mdat = false;
+    loop {
+        if box_pos == data.len() {
+            break;
+        }
+        if box_pos + 8 > data.len() {
+            return false;
+        }
+        let size32 =
+            u32::from_be_bytes(data[box_pos..box_pos + 4].try_into().expect("4 bytes")) as u64;
+        let box_type = &data[box_pos + 4..box_pos + 8];
+        let header_len: usize;
+        let size: usize;
+        if size32 == 1 {
+            if box_pos + 16 > data.len() {
+                return false;
+            }
+            size = u64::from_be_bytes(data[box_pos + 8..box_pos + 16].try_into().expect("8 bytes"))
+                as usize;
+            header_len = 16;
+        } else if size32 == 0 {
+            size = data.len() - box_pos;
+            header_len = 8;
+        } else {
+            size = size32 as usize;
+            header_len = 8;
+        }
+        if size < header_len {
+            return false;
+        }
+        match box_type {
+            b"moov" => saw_moov = true,
+            b"mdat" => saw_mdat = true,
+            _ => {}
+        }
+        let next = box_pos + size;
+        if next > data.len() {
+            return false;
+        }
+        box_pos = next;
+    }
+    saw_moov && saw_mdat
+}
+
+/// Extracts entry names from a crafted ZIP buffer's central directory and checks
+/// for the OOXML package markers (`[Content_Types].xml` and `word/document.xml`).
+pub fn docx_structure_valid(data: &[u8]) -> bool {
+    let mut names = Vec::new();
+    let mut idx = 0usize;
+    while idx + 4 <= data.len() && &data[idx..idx + 4] != b"PK\x01\x02" {
+        idx += 1;
+    }
+    while idx + 46 <= data.len() && &data[idx..idx + 4] == b"PK\x01\x02" {
+        let name_len = u16::from_le_bytes([data[idx + 28], data[idx + 29]]) as usize;
+        let extra_len = u16::from_le_bytes([data[idx + 30], data[idx + 31]]) as usize;
+        let comment_len = u16::from_le_bytes([data[idx + 32], data[idx + 33]]) as usize;
+        let start = idx + 46;
+        let end = start + name_len;
+        if end > data.len() {
+            break;
+        }
+        names.push(String::from_utf8_lossy(&data[start..end]).to_string());
+        idx = end + extra_len + comment_len;
+    }
+    names.iter().any(|n| n == "[Content_Types].xml")
+        && names.iter().any(|n| n == "word/document.xml")
 }
 
 fn score(
@@ -402,7 +541,7 @@ fn score(
     fragment_reconstructed: bool,
     size_consistent: bool,
 ) -> (f64, Vec<ScoreFactor>) {
-    let terminator_based = matches!(id, "jpeg" | "png" | "gif" | "pdf" | "zip");
+    let terminator_based = matches!(id, "jpeg" | "png" | "gif" | "pdf" | "zip" | "docx" | "mp4");
     let mut factors = vec![
         ScoreFactor {
             key: "structure_valid".into(),
@@ -816,6 +955,101 @@ mod tests {
         v
     }
 
+    /// Builds a valid OOXML package (DOCX) blob with a central directory that lists
+    /// `[Content_Types].xml` and `word/document.xml` entries.
+    fn docx_bytes() -> Vec<u8> {
+        fn entry(name: &str) -> Vec<u8> {
+            let data = match name {
+                "[Content_Types].xml" => b"<Types/>".to_vec(),
+                "word/document.xml" => b"<document/>".to_vec(),
+                _ => vec![0u8; 8],
+            };
+            let mut e = Vec::new();
+            e.extend_from_slice(b"PK\x03\x04");
+            e.extend_from_slice(&20u16.to_le_bytes());
+            e.extend_from_slice(&0u16.to_le_bytes());
+            e.extend_from_slice(&0u16.to_le_bytes());
+            e.extend_from_slice(&0u32.to_le_bytes());
+            e.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            e.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            e.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            e.extend_from_slice(&0u16.to_le_bytes());
+            e.extend_from_slice(name.as_bytes());
+            e.extend_from_slice(&data);
+            e
+        }
+
+        let names = [
+            "[Content_Types].xml",
+            "word/document.xml",
+            "word/styles.xml",
+        ];
+        let mut v = Vec::new();
+        let mut entries: Vec<(&str, u32)> = Vec::new();
+        for name in names {
+            let e = entry(name);
+            v.extend_from_slice(&e);
+            entries.push((name, e.len() as u32));
+        }
+        let cd_start = v.len() as u32;
+        let mut cd_entries: Vec<u32> = Vec::new();
+        for (name, size) in &entries {
+            cd_entries.push(v.len() as u32);
+            // Central directory file header per APPNOTE.TXT; offsets relative to sig.
+            v.extend_from_slice(b"PK\x01\x02"); // 0..4 signature
+            v.extend_from_slice(&20u16.to_le_bytes()); // 4..6 version made by
+            v.extend_from_slice(&20u16.to_le_bytes()); // 6..8 version needed
+            v.extend_from_slice(&0u16.to_le_bytes()); // 8..10 flags
+            v.extend_from_slice(&0u16.to_le_bytes()); // 10..12 compression
+            v.extend_from_slice(&0u16.to_le_bytes()); // 12..14 mod time
+            v.extend_from_slice(&0u16.to_le_bytes()); // 14..16 mod date
+            v.extend_from_slice(&0u32.to_le_bytes()); // 16..20 crc32
+            v.extend_from_slice(&size.to_le_bytes()); // 20..24 compressed size
+            v.extend_from_slice(&size.to_le_bytes()); // 24..28 uncompressed size
+            v.extend_from_slice(&(name.len() as u16).to_le_bytes()); // 28..30 name len
+            v.extend_from_slice(&0u16.to_le_bytes()); // 30..32 extra len
+            v.extend_from_slice(&0u16.to_le_bytes()); // 32..34 comment len
+            v.extend_from_slice(&0u16.to_le_bytes()); // 34..36 disk number
+            v.extend_from_slice(&0u16.to_le_bytes()); // 36..38 internal attrs
+            v.extend_from_slice(&0u32.to_le_bytes()); // 38..42 external attrs
+            v.extend_from_slice(&0u32.to_le_bytes()); // 42..46 local header offset
+            v.extend_from_slice(name.as_bytes()); // 46.. name
+        }
+        let cd_len = (v.len() - cd_start as usize) as u32;
+        v.extend_from_slice(b"PK\x05\x06");
+        v.extend_from_slice(&[0x00; 4]);
+        v.extend_from_slice(&(cd_entries.len() as u16).to_le_bytes());
+        v.extend_from_slice(&(cd_entries.len() as u16).to_le_bytes());
+        v.extend_from_slice(&cd_len.to_le_bytes());
+        v.extend_from_slice(&cd_start.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v
+    }
+
+    /// Builds a minimal valid MP4: ftyp, freespace padding, mdat with payload, moov.
+    fn mp4_bytes() -> Vec<u8> {
+        let mut v = Vec::new();
+        // ftyp box
+        let ftyp_payload = b"isom\x00\x00\x02\x00isomiso2mp41";
+        v.extend_from_slice(&(8 + ftyp_payload.len() as u32).to_be_bytes());
+        v.extend_from_slice(b"ftyp");
+        v.extend_from_slice(ftyp_payload);
+        // mdat box with payload
+        let mdat_payload = [0xAD; 128];
+        v.extend_from_slice(&(8 + mdat_payload.len() as u32).to_be_bytes());
+        v.extend_from_slice(b"mdat");
+        v.extend_from_slice(&mdat_payload);
+        // moov box with mvhd child
+        let mut mvhd = Vec::new();
+        mvhd.extend_from_slice(&(8 + 96u32).to_be_bytes());
+        mvhd.extend_from_slice(b"mvhd");
+        mvhd.extend_from_slice(&[0x00; 96]);
+        v.extend_from_slice(&(8 + mvhd.len() as u32).to_be_bytes());
+        v.extend_from_slice(b"moov");
+        v.extend_from_slice(&mvhd);
+        v
+    }
+
     fn valid_jpeg_bytes() -> Vec<u8> {
         let mut v = vec![0xFF, 0xD8];
         v.extend_from_slice(&[
@@ -957,6 +1191,50 @@ mod tests {
             bad_max < good_min,
             "bad files must rank below good files (bad_max={bad_max} good_min={good_min})"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn carves_mp4_and_docx_with_category_classification() {
+        let dir = std::env::temp_dir().join(format!("purgent-oa-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+
+        let mp4 = mp4_bytes();
+        let docx = docx_bytes();
+        let zip = zip_bytes();
+
+        let mp4_hash = sha256_hex(&mp4);
+        let docx_hash = sha256_hex(&docx);
+
+        let mut image = Vec::new();
+        image.extend_from_slice(&[0x01, 0x02, 0x03]);
+        image.extend_from_slice(&mp4);
+        image.extend_from_slice(&[0x0A; 96]);
+        image.extend_from_slice(&docx);
+        image.extend_from_slice(&[0x0B; 64]);
+        image.extend_from_slice(&zip);
+        image.extend_from_slice(&[0x0C; 128]);
+
+        let image_path = dir.join("src").join("oa.image");
+        std::fs::write(&image_path, &image).unwrap();
+
+        let run = carve_source(&image_path, &dir.join("out")).unwrap();
+
+        assert_eq!(run.files.len(), 3, "mp4, docx and plain zip all carved");
+        let by_sig: std::collections::HashMap<String, &RecoveredFile> =
+            run.files.iter().map(|f| (f.signature.clone(), f)).collect();
+        let mp4f = by_sig.get("mp4").expect("mp4 carved");
+        assert_eq!(mp4f.sha256, mp4_hash);
+        assert!(mp4f.structure_valid, "mp4 must parse as valid BMFF");
+        assert_eq!(mp4f.category, FileCategory::Video);
+        let docxf = by_sig.get("docx").expect("docx carved");
+        assert_eq!(docxf.sha256, docx_hash);
+        assert!(docxf.structure_valid, "docx must be OOXML-validated");
+        assert_eq!(docxf.category, FileCategory::Document);
+        let zipf = by_sig.get("zip").expect("plain zip stays zip, not docx");
+        assert!(zipf.structure_valid, "plain zip remains structurally valid");
+        assert_eq!(zipf.category, FileCategory::Archive);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

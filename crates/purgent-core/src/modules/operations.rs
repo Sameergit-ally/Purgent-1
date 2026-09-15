@@ -168,6 +168,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: format!("image file {}", image.display()),
             block_size: None,
+            fallback_acknowledged: false,
         };
         let report_dir = dir.join("reports");
         let outcome = run_wipe(request, &report_dir, TEST_KEY).unwrap();
@@ -207,6 +208,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: format!("image file {}", image.display()),
             block_size: None,
+            fallback_acknowledged: false,
         };
         let updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let updates_clone = updates.clone();
@@ -233,7 +235,7 @@ mod tests {
         assert!(!view.report_hash.is_empty());
         assert_eq!(view.signature_alg, "HMAC-SHA256");
         assert!(matches!(
-            view.verification.status,
+            view.verification.as_ref().unwrap().status,
             VerificationStatus::Passed
         ));
 
@@ -255,6 +257,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: "image file wrong.img".into(),
             block_size: None,
+            fallback_acknowledged: false,
         };
         let err = run_wipe(request, &dir.join("reports"), TEST_KEY).unwrap_err();
         assert!(matches!(err, WipeError::ConfirmationMismatch));
@@ -319,6 +322,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: format!("image file {}", image.display()),
             block_size: None,
+            fallback_acknowledged: false,
         };
         let report_dir = dir.join("reports");
         let updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

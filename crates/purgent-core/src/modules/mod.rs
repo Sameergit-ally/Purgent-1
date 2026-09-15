@@ -1,3 +1,4 @@
+pub mod classification;
 pub mod config;
 pub mod drive_eraser;
 pub mod file_eraser;
@@ -11,3 +12,4 @@ pub mod reporting;
 pub mod signing;
 pub mod storage;
 pub mod sync;
+pub mod trace_scrubber;

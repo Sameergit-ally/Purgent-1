@@ -4,7 +4,12 @@ mod windows;
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub mod hpa_dco;
+pub mod secure_erase;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaType {
     Hdd,
@@ -28,9 +33,34 @@ impl MediaType {
             MediaType::Unknown => "Unknown",
         }
     }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            MediaType::Hdd => "hdd",
+            MediaType::Ssd => "ssd",
+            MediaType::Nvme => "nvme",
+            MediaType::UsbFlash => "usb_flash",
+            MediaType::SdFlash => "sd_flash",
+            MediaType::CdRom => "cd_rom",
+            MediaType::Unknown => "unknown",
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub fn parse_media_type(id: &str) -> Result<MediaType, String> {
+    match id {
+        "hdd" => Ok(MediaType::Hdd),
+        "ssd" => Ok(MediaType::Ssd),
+        "nvme" => Ok(MediaType::Nvme),
+        "usb_flash" => Ok(MediaType::UsbFlash),
+        "sd_flash" => Ok(MediaType::SdFlash),
+        "cd_rom" => Ok(MediaType::CdRom),
+        "unknown" => Ok(MediaType::Unknown),
+        other => Err(format!("unknown media type id: {other}")),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BusType {
     Ata,
@@ -60,7 +90,7 @@ impl BusType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     pub id: String,
     pub model: String,

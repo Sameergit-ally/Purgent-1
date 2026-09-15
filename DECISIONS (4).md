@@ -255,3 +255,47 @@ carved files) was excluded â€” it is out of the audit-only scope and would risk 
 recovered evidence, contradicting RULES. Real-endpoint end-to-end verification is exercised
 manually with the user's Supabase project; the automated suite validates the behavior contract
 against a mock transport and an unreachable endpoint.
+
+## [2026-09-16] Hardware-backed sanitize with explicit overwrite fallback gate
+
+**Phase:** 12+
+**Decision:** ATA Secure Erase and NVMe Sanitize are now real in-band hardware methods (WipeMethod::AtaSecureErase / NvmeSanitize) executed on WipeTarget::Device. If the controller refuses, the operation returns WipeError::RequiresFallbackAck and only proceeds to a allback_wipe_spec (pseudo-random single overwrite) after the operator explicitly acknowledges in the UI; the report records method: overwrite and the fallback reason. HPA/DCO state rides along in WipeResult and the signed report.
+**Why:** RULES forbids silent degradation from a hardware method to blind overwrite; wear-leveled flash cannot be guaranteed clean by LBA overwrites, so a non-acknowledged fallback would be a false assurance. Recording method + reason keeps the chain of custody honest.
+**Alternative considered:** Automatically falling back. Rejected: violates RULES and defeats the purpose of IEEE 2883-2022 / NIST purge claims.
+
+## [2026-09-16] ISO 27037 evidence hash captured before purge
+
+**Phase:** 12+
+**Decision:** The iso_27037_capture standard (capture_evidence_before) streams the raw target and stores a SHA-256 evidence_hash in WipeResult and the signed report/XML before any destructive pass.
+**Why:** ISO/IEC 27037 evidence handling needs a verifiable hash of the pre-sanitization medium; the hash is computed before first byte is written and included in the canonical HMAC payload.
+**Alternative considered:** Hashing from the filesystem view of a mounted drive — rejected, it would change while wiping and is not a raw medium hash.
+
+## [2026-09-16] Trace scrubber attached to file erase
+
+**Phase:** 12+
+**Decision:** ile_eraser runs 	race_scrubber::scrub_trace after verify/delete, filling FileEraseResult.trace_scrub (per-action statuses) which flows into the signed report and XML export.
+**Why:** Trace artifacts (shell history, recent-docs, trash, shortcut metadata) can leak evidence of erased files; scrubbing after confirmed deletion and recording the best-effort outcome keeps the report truthful.
+**Alternative considered:** Scrubbing in parallel or before verify — rejected; post-verify avoids touching file state mid-verification.
+
+## [2026-09-16] IEEE 2883 and ISO 27037 wide standardization of wipe ids
+
+**Phase:** 12+
+**Decision:** WipeStandard carries seven variants including Ieee2883Purge, Iso27037Capture, AtaSecureErase, NvmeSanitize; src-tauri maps ids ieee_2883_purge, iso_27037_capture, ta_secure_erase, 
+vme_sanitize in wipe_standard_id/parse_wipe_standard, and the frontend surfaces compliance badges.
+**Why:** The verification report required IEEE 2883-2022 and ISO/IEC 27037 to be first-class, not aliases, so downstream audits see the true method.
+**Alternative considered:** Keep IEEE 2883 as a DoD-like pass alias. Rejected — mislabels the sanitization semantics in reports.
+
+## [2026-09-16] Reaction container: XML report certificate alongside JSON+PDF
+
+**Phase:** 12+
+**Decision:** eporting::export_xml renders a signed report as an auditable XML certificate (escaped; includes method, evidence hash, HPA/DCO, trace scrub counts, categories, signature); save_report_xml writes eport-<id>.xml; Tauri exposes export_report_xml / open_report_xml.
+**Why:** Compliance workflows need an XML export for existing tooling; keeping the canonical signed JSON as source of truth and emitting XML as a rendering avoids double-signature drift.
+**Alternative considered:** Signing the XML itself — rejected, one canonical signed artifact (JSON) plus deterministic renderings is simpler and still cross-checkable via report_hash.
+
+## [2026-09-16] HPA/DCO removal executed as task files, not deferred
+
+**Phase:** 12+
+**Decision:** Implemented real removal for detected HPA/DCO before hardware erase. hpa_dco::plan_removal maps state into ATA task files (SET MAX ADDRESS 0xF9 for native<=28-bit, SET MAX ADDRESS EXT 0x37 for larger, SET DEVICE CONFIGURATION RESET 0xB1/feat 0x04), and emove_hpa_dco issues them via ATA pass-through. Windows uses AtaPassThroughEx (CurrentTaskFile=current, PreviousTaskFile=previous, AtaFlags 0x08 48BIT_COMMAND for EXT, no data); Linux uses HDIO_DRIVE_TASKFILE (0x031d) with io_ports/hob_ports (out_flags 0x00B6 low + 0x3600 HOB bits for 48-bit so the device register nibble survives). Removal is attempted first (HPA then DCO), the result re-query updates HpaDcoRemoval, and it lands in WipeResult/Report/XML and the ReportView. Best-effort: a failure is logged and surfaced, never fatal and never a silent overwrite switch.
+**Why:** The P0 verification-review list called out untested HPA/DCO "removal"; detection alone did not satisfy the standard set.
+**Alternative considered:** Removing HPA via HDIO_DRIVE_CMD with hd_drive_cmd_hdr (per-bit taskfile is closer to hdparm and kernel docs, so chosen); DCO reset after HPA so a DCO reapplied capacity does not need a second HPA pass.
+**Risks:** Live-ioctl paths are unverifiable on the Windows dev host (compile-validated + encoding tested only); libc lacks HDIO_* so constants are pinned from include/uapi/linux/hdreg.h; existing Windows identify used ATA_FLAGS_DATA_IN=0x20 (NO_MULTIPLE) - corrected to 0x02, and ATA erase used 0x40 (FUA) for data-out - flagged, corrected path pending decision.

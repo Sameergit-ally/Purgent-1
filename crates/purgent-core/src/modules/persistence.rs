@@ -104,10 +104,17 @@ impl CaseDb {
     ) -> Result<(), PersistError> {
         let json_content =
             serde_json::to_string(report).map_err(|e| PersistError::Query(e.to_string()))?;
-        let verification_status = serde_json::to_value(&report.verification.status)
-            .ok()
+        let verification_status = report
+            .verification
+            .as_ref()
+            .and_then(|v| serde_json::to_value(v.status).ok())
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_default();
+        let mismatched_sectors = report
+            .verification
+            .as_ref()
+            .map(|v| v.mismatched_sectors as i64)
+            .unwrap_or(0);
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO report_records (
@@ -128,7 +135,7 @@ impl CaseDb {
                     report.start_time,
                     report.finish_time,
                     verification_status,
-                    report.verification.mismatched_sectors as i64,
+                    mismatched_sectors,
                     report.skipped_sector_count as i64,
                     report.report_hash,
                     report.signature_alg,
@@ -321,6 +328,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: format!("image file {}", image.display()),
             block_size: None,
+            fallback_acknowledged: false,
         };
         let result = crate::modules::drive_eraser::wipe(request).unwrap();
         let report = reporting::build_wipe_report(&result, TEST_KEY);

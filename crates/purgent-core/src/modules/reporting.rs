@@ -3,13 +3,17 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
+use super::classification::FileCategory;
 use super::drive_eraser::{VerificationResult, VerificationStatus, WipeResult};
 use super::file_eraser::{EraseFileRecord, EraseVerificationStatus, FileEraseResult};
 use super::hashing::sha256_hex;
 use super::recovery::CarveRun;
 use super::signing::hmac_sha256_hex;
+use super::storage::hpa_dco::{HpaDcoRemoval, HpaDcoState};
+use super::trace_scrubber::TraceScrubRecord;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Report {
     pub report_id: String,
     pub operation_type: String,
@@ -21,11 +25,63 @@ pub struct Report {
     pub capacity_bytes: u64,
     pub start_time: String,
     pub finish_time: String,
-    pub verification: VerificationResult,
+    pub verification: Option<VerificationResult>,
     pub skipped_sector_count: u64,
+    pub method: Option<String>,
+    pub evidence_hash: Option<String>,
+    pub hpa_dco: Option<HpaDcoState>,
+    pub hpa_dco_removal: Option<HpaDcoRemoval>,
+    pub trace_scrub: Option<TraceScrubRecord>,
+    pub categories: Option<Vec<FileCategoryCount>>,
     pub report_hash: String,
     pub signature_alg: String,
     pub signature: String,
+}
+
+impl Default for Report {
+    fn default() -> Self {
+        Report {
+            report_id: String::new(),
+            operation_type: String::new(),
+            operation_id: String::new(),
+            operator_id: String::new(),
+            target: String::new(),
+            standard_id: String::new(),
+            standard_label: String::new(),
+            capacity_bytes: 0,
+            start_time: String::new(),
+            finish_time: String::new(),
+            verification: None,
+            skipped_sector_count: 0,
+            method: None,
+            evidence_hash: None,
+            hpa_dco: None,
+            hpa_dco_removal: None,
+            trace_scrub: None,
+            categories: None,
+            report_hash: String::new(),
+            signature_alg: String::new(),
+            signature: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileCategoryCount {
+    pub category: FileCategory,
+    pub label: String,
+    pub count: usize,
+}
+
+pub fn category_counts(files: &[super::recovery::RecoveredFile]) -> Vec<FileCategoryCount> {
+    super::classification::aggregate_categories(files)
+        .into_iter()
+        .map(|(category, count)| FileCategoryCount {
+            category,
+            label: category.label().to_string(),
+            count,
+        })
+        .collect()
 }
 
 const SIGNATURE_ALG: &str = "HMAC-SHA256";
@@ -59,6 +115,12 @@ pub(crate) fn sign_report(report: &mut Report, key: &[u8]) {
 }
 
 pub fn build_wipe_report(result: &WipeResult, key: &[u8]) -> Report {
+    let verification = result.verification.as_ref().map(|v| VerificationResult {
+        status: v.status,
+        bytes_verified: v.bytes_verified,
+        mismatched_sectors: v.mismatched_sectors,
+        detail: v.detail.clone(),
+    });
     let mut report = Report {
         report_id: Uuid::new_v4().to_string(),
         operation_type: "secure_erase".to_string(),
@@ -74,8 +136,14 @@ pub fn build_wipe_report(result: &WipeResult, key: &[u8]) -> Report {
         capacity_bytes: result.capacity_bytes,
         start_time: result.started_at.clone(),
         finish_time: result.finished_at.clone(),
-        verification: result.verification.clone().expect("verification required"),
+        verification,
         skipped_sector_count: result.skipped_sectors.len() as u64,
+        method: Some(result.method.label().to_string()),
+        evidence_hash: result.evidence_hash.clone(),
+        hpa_dco: result.hpa_dco.clone(),
+        hpa_dco_removal: result.hpa_dco_removal.clone(),
+        trace_scrub: None,
+        categories: None,
         report_hash: String::new(),
         signature_alg: String::new(),
         signature: String::new(),
@@ -129,8 +197,14 @@ pub fn build_file_erase_report(result: &FileEraseResult, key: &[u8]) -> Report {
         capacity_bytes: result.files.iter().map(|f| f.bytes_erased).sum(),
         start_time: result.started_at.clone(),
         finish_time: result.finished_at.clone(),
-        verification: aggregate_verification(status, &result.files),
+        verification: Some(aggregate_verification(status, &result.files)),
         skipped_sector_count: 0,
+        method: None,
+        evidence_hash: None,
+        hpa_dco: None,
+        hpa_dco_removal: None,
+        trace_scrub: result.trace_scrub.clone(),
+        categories: None,
         report_hash: String::new(),
         signature_alg: String::new(),
         signature: String::new(),
@@ -166,8 +240,21 @@ pub fn build_recovery_report(run: &CarveRun, key: &[u8]) -> Report {
         capacity_bytes: run.scanned_bytes,
         start_time: run.started_at.clone(),
         finish_time: run.finished_at.clone(),
-        verification,
+        verification: Some(verification),
         skipped_sector_count: 0,
+        method: None,
+        evidence_hash: None,
+        hpa_dco: None,
+        hpa_dco_removal: None,
+        trace_scrub: None,
+        categories: {
+            let counts = category_counts(&run.files);
+            if counts.is_empty() {
+                None
+            } else {
+                Some(counts)
+            }
+        },
         report_hash: String::new(),
         signature_alg: String::new(),
         signature: String::new(),
@@ -178,6 +265,175 @@ pub fn build_recovery_report(run: &CarveRun, key: &[u8]) -> Report {
 
 pub fn report_to_json_string(report: &Report) -> String {
     serde_json::to_string(report).expect("report serializes")
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn tag(name: &str, value: &str) -> String {
+    format!("<{name}>{}</{name}>", xml_escape(value))
+}
+
+/// Renders the signed report as an audit-friendly XML certificate. The payload
+/// fields mirror the canonical signed JSON so the XML can be cross-checked against
+/// the stored `report_hash` / `signature`.
+pub fn export_xml(report: &Report) -> String {
+    let mut buf = String::new();
+    buf.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    buf.push_str("<purgent_report>\n");
+    buf.push_str(&tag("report_id", &format!("{}", report.report_id)));
+    buf.push_str(&tag("operation_type", &report.operation_type));
+    buf.push_str(&tag("operation_id", &report.operation_id));
+    buf.push_str(&tag("operator_id", &report.operator_id));
+    buf.push_str(&tag("target", &report.target));
+    buf.push_str(&tag("standard_id", &report.standard_id));
+    buf.push_str(&tag("standard_label", &report.standard_label));
+    buf.push_str(&tag("capacity_bytes", &report.capacity_bytes.to_string()));
+    buf.push_str(&tag("start_time", &report.start_time));
+    buf.push_str(&tag("finish_time", &report.finish_time));
+    if let Some(method) = &report.method {
+        buf.push_str(&tag("method", method));
+    }
+    if let Some(v) = &report.verification {
+        buf.push_str("<verification>\n");
+        buf.push_str(&format!(
+            "  {}\n",
+            tag(
+                "status",
+                &serde_json::to_string(&v.status).unwrap_or_default()
+            )
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("bytes_verified", &v.bytes_verified.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("mismatched_sectors", &v.mismatched_sectors.to_string())
+        ));
+        buf.push_str(&format!("  {}\n", tag("detail", &v.detail)));
+        buf.push_str("</verification>\n");
+    }
+    if let Some(evidence) = &report.evidence_hash {
+        buf.push_str(&tag("evidence_sha256", evidence));
+    }
+    if let Some(hpa) = &report.hpa_dco {
+        buf.push_str("<hpa_dco>\n");
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("hpa_present", &hpa.hpa_present.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("dco_present", &hpa.dco_present.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("removable", &hpa.removable.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("max_current_lba", &hpa.max_current_lba.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("max_native_lba", &hpa.max_native_lba.to_string())
+        ));
+        buf.push_str("</hpa_dco>\n");
+    }
+    if let Some(removal) = &report.hpa_dco_removal {
+        buf.push_str("<hpa_dco_removal>\n");
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("attempted", &removal.attempted.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("hpa_clear_sent", &removal.hpa_clear_sent.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("dco_reset_sent", &removal.dco_reset_sent.to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("removed", &removal.removed.to_string())
+        ));
+        buf.push_str(&format!("  {}\n", tag("detail", &removal.detail)));
+        buf.push_str("</hpa_dco_removal>\n");
+    }
+    if let Some(scrub) = &report.trace_scrub {
+        buf.push_str("<trace_scrub>\n");
+        buf.push_str(&format!("  {}\n", tag("path", &scrub.file_path)));
+        buf.push_str(&format!("  {}\n", tag("scrubbed_at", &scrub.scrubbed_at)));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("ok_actions", &scrub.ok_count().to_string())
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag(
+                "best_effort_actions",
+                &scrub.best_effort_count().to_string()
+            )
+        ));
+        buf.push_str(&format!(
+            "  {}\n",
+            tag("skipped_actions", &scrub.skipped_count().to_string())
+        ));
+        buf.push_str("</trace_scrub>\n");
+    }
+    if let Some(cats) = &report.categories {
+        if !cats.is_empty() {
+            buf.push_str("<categories>\n");
+            for c in cats {
+                buf.push_str(&format!(
+                    "  <category name=\"{}\" count=\"{}\"/>\n",
+                    xml_escape(&c.label),
+                    c.count
+                ));
+            }
+            buf.push_str("</categories>\n");
+        }
+    }
+    buf.push_str(&tag(
+        "verification_status",
+        &report
+            .verification
+            .as_ref()
+            .map(|v| serde_json::to_string(&v.status).unwrap_or_default())
+            .unwrap_or_else(|| "pending_hardware".into()),
+    ));
+    buf.push_str(&tag(
+        "skipped_sector_count",
+        &report.skipped_sector_count.to_string(),
+    ));
+    buf.push_str(&tag("report_hash", &report.report_hash));
+    buf.push_str(&tag("signature_alg", &report.signature_alg));
+    buf.push_str(&tag("signature", &report.signature));
+    buf.push_str("</purgent_report>\n");
+    buf
+}
+
+/// Saves the JSON + PDF certificate, and records the XML export path.
+pub fn save_report_xml(report: &Report, output_dir: &PathBuf) -> Result<PathBuf, String> {
+    fs::create_dir_all(output_dir).map_err(|e| format!("cannot create report dir: {e}"))?;
+    let xml_path = output_dir.join(format!("report-{}.xml", report.report_id));
+    fs::write(&xml_path, export_xml(report))
+        .map_err(|e| format!("cannot write report xml: {e}"))?;
+    Ok(xml_path)
 }
 
 pub fn save_report(report: &Report, output_dir: &PathBuf) -> Result<(PathBuf, PathBuf), String> {
@@ -336,6 +592,11 @@ mod tests {
             }),
             skipped_sectors: vec![],
             complete: true,
+            method: crate::modules::config::WipeMethod::Overwrite,
+            hpa_dco: None,
+            hpa_dco_removal: None,
+            evidence_hash: None,
+            fallback_reason: None,
         }
     }
 
@@ -396,13 +657,14 @@ mod tests {
             }],
             directories_removed: 1,
             complete: true,
+            trace_scrub: None,
         };
         let report = build_file_erase_report(&result, TEST_KEY);
         let json = report_to_json_string(&report);
         assert!(verify_report(json.as_bytes(), TEST_KEY));
         assert_eq!(report.operation_type, "file_erase");
         assert_eq!(
-            report.verification.status,
+            report.verification.as_ref().unwrap().status,
             VerificationStatus::Passed,
             "all files verified and deleted => passed"
         );
@@ -453,5 +715,45 @@ mod tests {
         let text = String::from_utf8_lossy(&a);
         assert!(text.contains("CERTIFICATE"));
         assert!(text.contains("Signature:    HMAC-SHA256 "));
+    }
+
+    #[test]
+    fn xml_export_is_well_formed_certificate() {
+        let report = signed_report();
+        let xml = export_xml(&report);
+        assert!(xml.starts_with("<?xml version=\"1.0\""));
+        assert!(xml.contains("<purgent_report>"));
+        assert!(xml.contains(&format!("<report_id>{}</report_id>", report.report_id)));
+        assert!(xml.contains(&format!(
+            "<report_hash>{}</report_hash>",
+            report.report_hash
+        )));
+        assert!(xml.contains(&format!("<signature>{}</signature>", report.signature)));
+        assert!(xml.contains("<verification>"));
+        assert!(xml.ends_with("</purgent_report>\n"));
+        assert!(
+            !xml.contains("&amp;invalid"),
+            "unknown fields must be absent"
+        );
+    }
+
+    #[test]
+    fn xml_export_escapes_xml_special_characters() {
+        let mut report = signed_report();
+        report.target = "folder C:\\data & <vault>'\"".into();
+        let xml = export_xml(&report);
+        assert!(xml.contains("C:\\data &amp; &lt;vault&gt;&apos;&quot;"));
+        assert!(!xml.contains("<vault>"));
+    }
+
+    #[test]
+    fn save_report_xml_writes_file() {
+        let dir = std::env::temp_dir().join(format!("purgent-xml-{}", uuid::Uuid::new_v4()));
+        let report = signed_report();
+        let xml_path = save_report_xml(&report, &dir).unwrap();
+        assert!(xml_path.exists());
+        let contents = std::fs::read_to_string(&xml_path).unwrap();
+        assert!(contents.contains(&format!("<report_id>{}</report_id>", report.report_id)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

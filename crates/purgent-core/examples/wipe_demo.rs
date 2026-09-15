@@ -61,6 +61,7 @@ fn main() {
         standard,
         operator_confirmed_target: typed,
         block_size: None,
+        fallback_acknowledged: false,
     }) {
         Ok(result) => {
             println!(

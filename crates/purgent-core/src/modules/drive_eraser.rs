@@ -5,8 +5,11 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use zeroize::Zeroize;
 
-use super::config::{self, PassPattern, WipeSpec, WipeStandard};
+use super::config::{self, PassPattern, WipeMethod, WipeSpec, WipeStandard};
 use super::log;
+use super::storage::hpa_dco::{HpaDcoRemoval, HpaDcoState};
+use super::storage::secure_erase;
+use super::storage::MediaType;
 
 const SECTOR_SIZE: u64 = 512;
 const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
@@ -14,7 +17,11 @@ const DEFAULT_BLOCK_SIZE: u64 = 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WipeTarget {
     ImageFile(PathBuf),
-    Device { path: String, capacity_bytes: u64 },
+    Device {
+        path: String,
+        capacity_bytes: u64,
+        media_type: MediaType,
+    },
 }
 
 impl WipeTarget {
@@ -24,9 +31,20 @@ impl WipeTarget {
             WipeTarget::Device {
                 path,
                 capacity_bytes,
+                media_type,
             } => {
-                format!("device {path} ({capacity_bytes} bytes)")
+                format!(
+                    "device {path} ({capacity_bytes} bytes, {} media)",
+                    media_type.label()
+                )
             }
+        }
+    }
+
+    pub fn media_type(&self) -> MediaType {
+        match self {
+            WipeTarget::ImageFile(_) => MediaType::Unknown,
+            WipeTarget::Device { media_type, .. } => *media_type,
         }
     }
 
@@ -115,6 +133,7 @@ pub enum WipeError {
     Target(String),
     Reporting(String),
     Io(String),
+    RequiresFallbackAck(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +158,7 @@ pub struct WipeRequest {
     pub standard: WipeStandard,
     pub operator_confirmed_target: String,
     pub block_size: Option<u64>,
+    pub fallback_acknowledged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -162,6 +182,7 @@ pub struct WipeResult {
     pub target: String,
     pub standard: WipeStandard,
     pub standard_label: String,
+    pub method: WipeMethod,
     pub capacity_bytes: u64,
     pub started_at: String,
     pub finished_at: String,
@@ -169,6 +190,10 @@ pub struct WipeResult {
     pub verification: Option<VerificationResult>,
     pub skipped_sectors: Vec<u64>,
     pub complete: bool,
+    pub hpa_dco: Option<HpaDcoState>,
+    pub hpa_dco_removal: Option<HpaDcoRemoval>,
+    pub evidence_hash: Option<String>,
+    pub fallback_reason: Option<String>,
 }
 
 impl WipeResult {
@@ -209,10 +234,11 @@ pub fn wipe_with_progress(
     log::log(
         "selected",
         &format!(
-            "operation={operation_id} operator={} target={} standard={} capacity={capacity}",
+            "operation={operation_id} operator={} target={} standard={} capacity={capacity} method={}",
             request.operator_id,
             request.target.display(),
-            spec.standard.label()
+            spec.standard.label(),
+            spec.method.label()
         ),
     );
 
@@ -220,19 +246,249 @@ pub fn wipe_with_progress(
         return Err(WipeError::Target("target has no sectors to wipe".into()));
     }
 
+    let mut evidence_hash: Option<String> = None;
+    if spec.capture_evidence_before {
+        let mut evidence_file = request.target.open()?;
+        evidence_hash = Some(capture_evidence_hash(
+            &mut evidence_file,
+            capacity,
+            block_size,
+        )?);
+        log::log(
+            "evidence",
+            &format!(
+                "operation={operation_id} raw evidence hash captured before wipe (sha256={})",
+                evidence_hash.as_ref().expect("set above")
+            ),
+        );
+    }
+
     let mut file = request.target.open()?;
+
+    if spec.method != WipeMethod::Overwrite {
+        return run_hardware_method(
+            request,
+            spec,
+            capacity,
+            block_size,
+            operation_id,
+            started_at,
+            evidence_hash,
+            progress,
+        );
+    }
+
     wipe_with_spec(
         &mut file,
         capacity,
         &spec,
         request.standard,
+        request.target.display(),
         block_size,
         &operation_id,
         &request.operator_id,
-        request.target.display(),
         started_at,
+        WipeMethod::Overwrite,
+        None,
+        None,
+        evidence_hash,
+        None,
         progress,
     )
+}
+
+/// Best-effort HPA/DCO removal for a real (non-NVMe) device target before a
+/// hardware erase. NVMe devices have no HPA/DCO concept, and image files are
+/// never touched. Failures are surfaced in the report but never block the wipe.
+fn attempt_hpa_dco_removal(request: &WipeRequest, operation_id: &str) -> Option<HpaDcoRemoval> {
+    match &request.target {
+        WipeTarget::Device {
+            path, media_type, ..
+        } if *media_type != MediaType::Nvme => attempt_remove_hpa_dco(path, operation_id),
+        _ => None,
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn attempt_remove_hpa_dco(path: &str, operation_id: &str) -> Option<HpaDcoRemoval> {
+    match super::storage::hpa_dco::remove_hpa_dco(path) {
+        Ok(removal) => {
+            log::log(
+                "verified",
+                &format!(
+                    "operation={operation_id} HPA/DCO removal: {}",
+                    removal.detail
+                ),
+            );
+            Some(removal)
+        }
+        Err(err) => {
+            log::log(
+                "warn",
+                &format!("operation={operation_id} HPA/DCO removal unavailable: {err}"),
+            );
+            Some(HpaDcoRemoval {
+                attempted: true,
+                detail: err,
+                ..HpaDcoRemoval::default()
+            })
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn attempt_remove_hpa_dco(_path: &str, _operation_id: &str) -> Option<HpaDcoRemoval> {
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_hardware_method(
+    request: WipeRequest,
+    spec: WipeSpec,
+    capacity: u64,
+    block_size: u64,
+    operation_id: String,
+    started_at: String,
+    evidence_hash: Option<String>,
+    progress: super::progress::ProgressFn,
+) -> Result<WipeResult, WipeError> {
+    let operator_id = request.operator_id.clone();
+    let standard = request.standard;
+    let target_desc = request.target.display();
+
+    // Restore any hidden sectors before the destructive pass so the erase covers
+    // the full native capacity. Best-effort: failure is logged, never fatal.
+    let hpa_dco_removal = attempt_hpa_dco_removal(&request, &operation_id);
+
+    let device_result = match &request.target {
+        WipeTarget::Device {
+            path, media_type, ..
+        } => secure_erase::hardware_erase(path, *media_type),
+        WipeTarget::ImageFile(_) => Err(secure_erase::HardwareEraseError::Unsupported(
+            "hardware erase requires a real device target, not an image file".into(),
+        )),
+    };
+
+    let (method, hpa_dco, fallback_reason) = match device_result {
+        Ok(outcome) => {
+            log::log(
+                "verified",
+                &format!(
+                    "operation={operation_id} hardware erase accepted: {}",
+                    outcome.detail
+                ),
+            );
+            (spec.method, Some(outcome.hpa_dco), None)
+        }
+        Err(err) => {
+            log::log(
+                "failed",
+                &format!("operation={operation_id} hardware erase unavailable: {err}"),
+            );
+            if !request.fallback_acknowledged {
+                return Err(WipeError::RequiresFallbackAck(format!(
+                    "{err} — overwrite fallback denied pending operator acknowledgement"
+                )));
+            }
+            log::log(
+                "warn",
+                &format!(
+                    "operation={operation_id} operator acknowledged overwrite fallback (no silent degradation)"
+                ),
+            );
+            let fallback = config::fallback_wipe_spec(standard);
+            let mut file = request.target.open()?;
+            return wipe_with_spec(
+                &mut file,
+                capacity,
+                &fallback,
+                standard,
+                target_desc,
+                block_size,
+                &operation_id,
+                &operator_id,
+                started_at,
+                WipeMethod::Overwrite,
+                None,
+                hpa_dco_removal,
+                evidence_hash,
+                Some(format!("hardware erase unavailable: {err}")),
+                progress,
+            );
+        }
+    };
+
+    let finished_at = log::now_utc_rfc3339();
+    let result = WipeResult {
+        operation_id: operation_id.clone(),
+        target: target_desc,
+        standard,
+        standard_label: standard.label().to_string(),
+        method,
+        capacity_bytes: capacity,
+        started_at,
+        finished_at,
+        operator_id,
+        verification: None,
+        skipped_sectors: Vec::new(),
+        complete: true,
+        hpa_dco,
+        hpa_dco_removal,
+        evidence_hash,
+        fallback_reason,
+    };
+
+    log::log(
+        "reported",
+        &format!(
+            "operation={operation_id} report_ready=true complete={} method={}",
+            result.complete,
+            result.method.label()
+        ),
+    );
+    Ok(result)
+}
+
+/// Streams the raw target bytes and returns their SHA-256, captured before any
+/// destructive pass so that ISO/IEC 27037 evidence handling keeps a hash of the
+/// pre-wipe medium.
+fn capture_evidence_hash(
+    file: &mut File,
+    capacity: u64,
+    block_size: u64,
+) -> Result<String, WipeError> {
+    use sha2::{Digest, Sha256};
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| WipeError::Io(e.to_string()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; block_size as usize];
+    let mut offset = 0u64;
+    while offset < capacity {
+        let remaining = capacity - offset;
+        let chunk = if remaining < block_size {
+            remaining as usize
+        } else {
+            block_size as usize
+        };
+        let n = match file.read(&mut buf[..chunk]) {
+            Ok(read) => read,
+            Err(e) => {
+                return Err(WipeError::Io(format!(
+                    "evidence capture read failed at offset {offset}: {e}"
+                )));
+            }
+        };
+        if n == 0 {
+            return Err(WipeError::Io(format!(
+                "evidence capture hit EOF at {offset} of {capacity} bytes"
+            )));
+        }
+        hasher.update(&buf[..n]);
+        offset += n as u64;
+    }
+    let digest = hasher.finalize();
+    Ok(hex::encode(digest))
 }
 
 fn wipe_with_spec(
@@ -240,11 +496,16 @@ fn wipe_with_spec(
     capacity: u64,
     spec: &WipeSpec,
     standard: WipeStandard,
+    target_desc: String,
     block_size: u64,
     operation_id: &str,
     operator_id: &str,
-    target_desc: String,
     started_at: String,
+    method: WipeMethod,
+    hpa_dco: Option<HpaDcoState>,
+    hpa_dco_removal: Option<HpaDcoRemoval>,
+    evidence_hash: Option<String>,
+    fallback_reason: Option<String>,
     progress: super::progress::ProgressFn,
 ) -> Result<WipeResult, WipeError> {
     let mut skipped_sectors: Vec<u64> = Vec::new();
@@ -302,6 +563,7 @@ fn wipe_with_spec(
         target: target_desc,
         standard,
         standard_label: standard.label().to_string(),
+        method,
         capacity_bytes: capacity,
         started_at,
         finished_at,
@@ -309,6 +571,10 @@ fn wipe_with_spec(
         verification: Some(verification),
         skipped_sectors,
         complete,
+        hpa_dco,
+        hpa_dco_removal,
+        evidence_hash,
+        fallback_reason,
     };
 
     log::log(
@@ -536,6 +802,7 @@ mod tests {
             standard,
             operator_confirmed_target: format!("image file {}", path.display()),
             block_size: None,
+            fallback_acknowledged: false,
         })
         .expect("wipe succeeds");
 
@@ -601,6 +868,7 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: format!("image file {}", path.display()),
             block_size: None,
+            fallback_acknowledged: false,
         })
         .unwrap();
         assert!(result.complete, "clean wipe must complete");
@@ -649,9 +917,102 @@ mod tests {
             standard: WipeStandard::Nist800_88Clear,
             operator_confirmed_target: "device \\\\.\\PHYSICALDRIVE0 (999 bytes)".into(),
             block_size: None,
+            fallback_acknowledged: false,
         })
         .unwrap_err();
         assert_eq!(err, WipeError::ConfirmationMismatch);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hardware_method_on_image_requires_fallback_acknowledgement() {
+        let dir = std::env::temp_dir().join(format!("purgent-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("disk.img");
+        make_image(&path, 1024 * 1024, 0x5A);
+        let err = wipe(WipeRequest {
+            operator_id: "test-operator".into(),
+            target: WipeTarget::ImageFile(path.clone()),
+            standard: WipeStandard::AtaSecureErase,
+            operator_confirmed_target: format!("image file {}", path.display()),
+            block_size: None,
+            fallback_acknowledged: false,
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, WipeError::RequiresFallbackAck(_)),
+            "hardware method failing without acknowledgement must surface RequiresFallbackAck"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn acknowledged_fallback_falls_back_to_overwrite_and_records_reason() {
+        let dir = std::env::temp_dir().join(format!("purgent-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("disk.img");
+        make_image(&path, 512 * 1024, 0x3C);
+        let result = wipe(WipeRequest {
+            operator_id: "test-operator".into(),
+            target: WipeTarget::ImageFile(path.clone()),
+            standard: WipeStandard::AtaSecureErase,
+            operator_confirmed_target: format!("image file {}", path.display()),
+            block_size: None,
+            fallback_acknowledged: true,
+        })
+        .expect("acknowledged fallback proceeds to overwrite");
+        assert!(
+            result.complete,
+            "fallback overwrite must complete and verify"
+        );
+        assert_eq!(
+            result.method,
+            WipeMethod::Overwrite,
+            "fallback must report overwrite method (no silent hardware claim)"
+        );
+        assert!(
+            result.fallback_reason.is_some(),
+            "fallback must record why hardware erase was not used"
+        );
+        assert_eq!(
+            result
+                .verification
+                .as_ref()
+                .expect("fallback runs read-back verification")
+                .status,
+            VerificationStatus::Passed,
+            "fallback overwrite must pass read-back verification"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn iso27037_capture_records_pre_wipe_evidence_hash() {
+        let dir = std::env::temp_dir().join(format!("purgent-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("disk.img");
+        let content = [0xA5u8; 512 * 4];
+        std::fs::write(&path, &content).unwrap();
+        let result = wipe(WipeRequest {
+            operator_id: "test-operator".into(),
+            target: WipeTarget::ImageFile(path.clone()),
+            standard: WipeStandard::Iso27037Capture,
+            operator_confirmed_target: format!("image file {}", path.display()),
+            block_size: None,
+            fallback_acknowledged: false,
+        })
+        .expect("capture wipe succeeds");
+        let expected = crate::modules::hashing::sha256_hex(&content);
+        assert_eq!(
+            result.evidence_hash.as_deref(),
+            Some(expected.as_str()),
+            "evidence hash must match the pre-wipe raw image"
+        );
+        assert_eq!(
+            result.verification.as_ref().unwrap().status,
+            VerificationStatus::Passed
+        );
+        assert_eq!(result.method, WipeMethod::Overwrite);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
