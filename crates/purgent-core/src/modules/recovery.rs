@@ -1277,4 +1277,73 @@ mod tests {
         assert_eq!(on_disk, jpeg, "recovered bytes identical to original");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    #[ignore = "requires a public forensic corpus image (NIST CFReDS or equivalent); set PURGENT_CFREDS_IMAGE to run"]
+    fn carve_against_cfreds_image() {
+        // Validates the carving engine against a recognized forensic corpus rather
+        // than only synthetic files (RULES §7 / gap-plan P1 #4). Ignored by default:
+        // the operator supplies the image + optional expected-hash manifest.
+        use std::collections::HashSet;
+        use std::path::Path;
+        use uuid::Uuid;
+
+        let Some(image) = std::env::var("PURGENT_CFREDS_IMAGE").ok() else {
+            eprintln!("[cfreds] skipped: set PURGENT_CFREDS_IMAGE to a forensic corpus image");
+            return;
+        };
+        let image_path = Path::new(&image);
+        assert!(image_path.is_file(), "corpus image {image} not found");
+
+        let out = std::env::temp_dir().join(format!("purgent-cfreds-{}", Uuid::new_v4()));
+        let run = carve_source(image_path, &out).expect("carve must complete on the corpus image");
+
+        eprintln!(
+            "[cfreds] scan summary: source={} scanned_bytes={} recovered_files={}",
+            run.source,
+            run.scanned_bytes,
+            run.files.len()
+        );
+        for f in &run.files {
+            eprintln!(
+                "[cfreds] recovered signature={} offset={} size={} valid={} confidence={:.3} sha256={}",
+                f.signature, f.source_offset, f.size_bytes, f.structure_valid, f.confidence, f.sha256
+            );
+        }
+
+        if let Ok(manifest_path) = std::env::var("PURGENT_CFREDS_MANIFEST") {
+            let expected: HashSet<String> = std::fs::read_to_string(&manifest_path)
+                .expect("manifest must exist")
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            let got: HashSet<String> = run.files.iter().map(|f| f.sha256.clone()).collect();
+            let true_positives = got.intersection(&expected).count();
+            let false_positives = got.len().saturating_sub(true_positives);
+            let false_negatives = expected.len().saturating_sub(true_positives);
+            eprintln!(
+                "[cfreds] precision={:.3} recall={:.3} tp={} fp={} fn={}",
+                if got.is_empty() {
+                    0.0
+                } else {
+                    true_positives as f64 / got.len() as f64
+                },
+                if expected.is_empty() {
+                    0.0
+                } else {
+                    true_positives as f64 / expected.len() as f64
+                },
+                true_positives,
+                false_positives,
+                false_negatives
+            );
+            assert!(
+                run.files.iter().any(|f| f.structure_valid),
+                "corpus run produced no structurally valid carve"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }

@@ -5,6 +5,8 @@
 //! fallback is allowed (see `drive_eraser::WipeError::RequiresFallbackAck`) — there is
 //! never a silent degradation from a hardware method to blind overwrite.
 
+#[cfg(windows)]
+use super::hpa_dco::ATA_FLAGS_DATA_OUT;
 use super::hpa_dco::{query_hpa_dco, HpaDcoState};
 use super::MediaType;
 
@@ -254,6 +256,18 @@ fn ata_secure_erase_windows(path: &str) -> Result<SecureEraseOutcome, HardwareEr
 }
 
 #[cfg(windows)]
+/// Maps whether a command carries a 512-byte sector out to the WDK data-direction
+/// flags (ntddscsi.h). Data-out = 0x04; no data = 0x00. Data-in commands use
+/// `ATA_FLAGS_DATA_IN` directly at the call site.
+fn ata_flags(data_out: bool) -> u16 {
+    if data_out {
+        ATA_FLAGS_DATA_OUT
+    } else {
+        0
+    }
+}
+
+#[cfg(windows)]
 fn ata_task(
     handle: windows_sys::Win32::Foundation::HANDLE,
     task_file: [u8; 8],
@@ -268,7 +282,7 @@ fn ata_task(
     let mut buffer = vec![0u8; header_size + 512];
     let apt = AtaPassThroughEx {
         Length: header_size as u16,
-        AtaFlags: if data_out.is_some() { 0x40 } else { 0x00 },
+        AtaFlags: ata_flags(data_out.is_some()),
         PathId: 0,
         TargetId: 0,
         Lun: 0,
@@ -542,5 +556,54 @@ mod tests {
             assert_eq!(password.len(), 32);
             assert_eq!(password[0], b'P');
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ata_flags_matches_wdk_constants() {
+        use crate::modules::storage::hpa_dco::{ATA_FLAGS_DATA_IN, ATA_FLAGS_DATA_OUT};
+        assert_eq!(
+            ATA_FLAGS_DATA_OUT, 0x04,
+            "ATA_FLAGS_DATA_OUT must be 0x04 per ntddscsi.h"
+        );
+        assert_eq!(
+            ATA_FLAGS_DATA_IN, 0x02,
+            "ATA_FLAGS_DATA_IN must be 0x02 per ntddscsi.h"
+        );
+        assert_eq!(ata_flags(true), 0x04, "data-out command must set DATA_OUT");
+        assert_eq!(
+            ata_flags(false),
+            0x00,
+            "no-data command must leave flags at zero"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ata_task_header_serializes_wdk_data_out_flag() {
+        use crate::modules::storage::hpa_dco::{serialize_apt, AtaPassThroughEx};
+        let header_size = size_of::<AtaPassThroughEx>();
+        let mut buf = vec![0u8; header_size];
+        let apt = AtaPassThroughEx {
+            Length: header_size as u16,
+            AtaFlags: ata_flags(true),
+            PathId: 0,
+            TargetId: 0,
+            Lun: 0,
+            ReservedAsUchar: 0,
+            DataTransferLength: 512,
+            TimeOutValue: 30,
+            ReservedAsUlong: 0,
+            DataBufferOffset: header_size as u32,
+            PreviousTaskFile: [0; 8],
+            CurrentTaskFile: [0; 8],
+        };
+        serialize_apt(&apt, &mut buf);
+        // AtaFlags occupies bytes 2..4 of the serialized ATA_PASS_THROUGH_EX structure
+        assert_eq!(
+            buf[2..4],
+            0x0004u16.to_le_bytes(),
+            "serialized header must carry WDK ATA_FLAGS_DATA_OUT (0x04) at byte offset 2..4"
+        );
     }
 }

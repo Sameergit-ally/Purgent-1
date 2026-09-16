@@ -115,7 +115,7 @@ closes that gap:
 ### Prerequisites
 
 - **Node.js 20+** and npm
-- **Rust** toolchain (stable)
+- **Rust 1.98+** (pinned via [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` will pick it up automatically)
 - **Windows:** MSVC C++ Build Tools ("Desktop development with C++") + WebView2 Runtime
 - **Linux:** GTK / WebKit dependencies — see the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
 
@@ -142,6 +142,9 @@ cargo build --workspace    # compile the Rust engine
 cargo test --workspace     # full engine test suite (80+ tests)
 npm run tauri build        # production desktop bundle
 ```
+
+Rust version is pinned in [`rust-toolchain.toml`](rust-toolchain.toml) — `rustup` selects it
+automatically; minimum supported Rust is 1.98.
 
 ### CLI demo (no UI)
 
@@ -183,6 +186,11 @@ cargo run --example wipe_demo     # exercise the core engine end-to-end on a tem
 | [`LEARNING.md`](LEARNING.md) | Hackathon prep — theory notes + judge-style Q&A. |
 | [`Purgent_Project_Verification_Report.md`](Purgent_Project_Verification_Report.md) | External verification & gap-analysis report (v3). |
 | [`Purgent_Frontend_TODO.md`](Purgent_Frontend_TODO.md) | Frontend code-review fix list (all items completed). |
+| [`Purgent_Gaps_Action_Plan.md`](Purgent_Gaps_Action_Plan.md) | Gap-closure action plan (P0–P3) with live status. |
+| [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md) | Known correctness/security issues tracker (open + fixed). |
+| [`HARDWARE_VALIDATION.md`](HARDWARE_VALIDATION.md) | Live hard-drive validation log (evidence required per RULES). |
+| [`FORENSIC_VALIDATION.md`](FORENSIC_VALIDATION.md) | Recovery accuracy evidence against forensic datasets. |
+| [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md) | Security-hardening audit checklist + findings. |
 | [`DECISIONS (4).md`](DECISIONS%20(4).md) | Engineering decision log (append-only). |
 | [`PROJECT (4).md`](PROJECT%20(4).md) | Project plan and phase definitions. |
 | [`AGENTS (4).md`](AGENTS%20(4).md) | Agent guidelines for working in this repo. |

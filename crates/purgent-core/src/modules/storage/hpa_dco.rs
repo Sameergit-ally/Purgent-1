@@ -304,10 +304,12 @@ pub(crate) const IOCTL_ATA_PASS_THROUGH: u32 =
 #[cfg(windows)]
 // Windows ATA pass-through flags (WDK ntddscsi.h): DRDY_REQUIRED=0x01,
 // DATA_IN=0x02, DATA_OUT=0x04, 48BIT_COMMAND=0x08, USE_DMA=0x10, NO_MULTIPLE=0x20.
-// Note: the value really is 0x02 for DATA_IN (0x20 is NO_MULTIPLE).
-const ATA_FLAGS_DATA_IN: u16 = 0x02;
+// Note: the value really is 0x02 for DATA_IN / 0x04 for DATA_OUT (0x20 is NO_MULTIPLE).
+pub(crate) const ATA_FLAGS_DATA_IN: u16 = 0x02;
 #[cfg(windows)]
-const ATA_FLAGS_48BIT_COMMAND: u16 = 0x08;
+pub(crate) const ATA_FLAGS_DATA_OUT: u16 = 0x04;
+#[cfg(windows)]
+pub(crate) const ATA_FLAGS_48BIT_COMMAND: u16 = 0x08;
 
 #[cfg(windows)]
 #[allow(non_snake_case)]

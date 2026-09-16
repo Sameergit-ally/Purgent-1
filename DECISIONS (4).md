@@ -268,14 +268,14 @@ against a mock transport and an unreachable endpoint.
 **Phase:** 12+
 **Decision:** The iso_27037_capture standard (capture_evidence_before) streams the raw target and stores a SHA-256 evidence_hash in WipeResult and the signed report/XML before any destructive pass.
 **Why:** ISO/IEC 27037 evidence handling needs a verifiable hash of the pre-sanitization medium; the hash is computed before first byte is written and included in the canonical HMAC payload.
-**Alternative considered:** Hashing from the filesystem view of a mounted drive — rejected, it would change while wiping and is not a raw medium hash.
+**Alternative considered:** Hashing from the filesystem view of a mounted drive ï¿½ rejected, it would change while wiping and is not a raw medium hash.
 
 ## [2026-09-16] Trace scrubber attached to file erase
 
 **Phase:** 12+
 **Decision:** ile_eraser runs 	race_scrubber::scrub_trace after verify/delete, filling FileEraseResult.trace_scrub (per-action statuses) which flows into the signed report and XML export.
 **Why:** Trace artifacts (shell history, recent-docs, trash, shortcut metadata) can leak evidence of erased files; scrubbing after confirmed deletion and recording the best-effort outcome keeps the report truthful.
-**Alternative considered:** Scrubbing in parallel or before verify — rejected; post-verify avoids touching file state mid-verification.
+**Alternative considered:** Scrubbing in parallel or before verify ï¿½ rejected; post-verify avoids touching file state mid-verification.
 
 ## [2026-09-16] IEEE 2883 and ISO 27037 wide standardization of wipe ids
 
@@ -283,14 +283,14 @@ against a mock transport and an unreachable endpoint.
 **Decision:** WipeStandard carries seven variants including Ieee2883Purge, Iso27037Capture, AtaSecureErase, NvmeSanitize; src-tauri maps ids ieee_2883_purge, iso_27037_capture, ta_secure_erase, 
 vme_sanitize in wipe_standard_id/parse_wipe_standard, and the frontend surfaces compliance badges.
 **Why:** The verification report required IEEE 2883-2022 and ISO/IEC 27037 to be first-class, not aliases, so downstream audits see the true method.
-**Alternative considered:** Keep IEEE 2883 as a DoD-like pass alias. Rejected — mislabels the sanitization semantics in reports.
+**Alternative considered:** Keep IEEE 2883 as a DoD-like pass alias. Rejected ï¿½ mislabels the sanitization semantics in reports.
 
 ## [2026-09-16] Reaction container: XML report certificate alongside JSON+PDF
 
 **Phase:** 12+
 **Decision:** eporting::export_xml renders a signed report as an auditable XML certificate (escaped; includes method, evidence hash, HPA/DCO, trace scrub counts, categories, signature); save_report_xml writes eport-<id>.xml; Tauri exposes export_report_xml / open_report_xml.
 **Why:** Compliance workflows need an XML export for existing tooling; keeping the canonical signed JSON as source of truth and emitting XML as a rendering avoids double-signature drift.
-**Alternative considered:** Signing the XML itself — rejected, one canonical signed artifact (JSON) plus deterministic renderings is simpler and still cross-checkable via report_hash.
+**Alternative considered:** Signing the XML itself ï¿½ rejected, one canonical signed artifact (JSON) plus deterministic renderings is simpler and still cross-checkable via report_hash.
 
 ## [2026-09-16] HPA/DCO removal executed as task files, not deferred
 
@@ -299,3 +299,14 @@ vme_sanitize in wipe_standard_id/parse_wipe_standard, and the frontend surfaces 
 **Why:** The P0 verification-review list called out untested HPA/DCO "removal"; detection alone did not satisfy the standard set.
 **Alternative considered:** Removing HPA via HDIO_DRIVE_CMD with hd_drive_cmd_hdr (per-bit taskfile is closer to hdparm and kernel docs, so chosen); DCO reset after HPA so a DCO reapplied capacity does not need a second HPA pass.
 **Risks:** Live-ioctl paths are unverifiable on the Windows dev host (compile-validated + encoding tested only); libc lacks HDIO_* so constants are pinned from include/uapi/linux/hdreg.h; existing Windows identify used ATA_FLAGS_DATA_IN=0x20 (NO_MULTIPLE) - corrected to 0x02, and ATA erase used 0x40 (FUA) for data-out - flagged, corrected path pending decision.
+
+## [2026-09-16] Windows ATA data-out flag corrected 0x40 â†’ 0x04 (`ATA_FLAGS_DATA_OUT`)
+
+**Phase:** 12 (closure of gap-plan P0 #1)
+**Decision:** The ATA pass-through data-out branch in `secure_erase::ata_task` used `AtaFlags: 0x40`, which WDK `ntddscsi.h` does not define. Corrected to `ATA_FLAGS_DATA_OUT = 0x04` (write data to the device), cross-referenced against the `ATA_PASS_THROUGH_EX` documentation (flag table: DRDY_REQUIRED=0x01, DATA_IN=0x02, DATA_OUT=0x04, 48BIT_COMMAND=0x08, USE_DMA=0x10, NO_MULTIPLE=0x20). The data-direction selection is now a pure helper (`ata_flags(data_out: bool)`) so the byte value is unit-testable on any Windows build.
+**Audit result:** full-storage-layer audit of `AtaFlags` found only this single wrong value; `hpa_dco` IDENTIFY uses `ATA_FLAGS_DATA_IN` (0x02), the LBA48 branch uses `ATA_FLAGS_48BIT_COMMAND` (0x08), and the no-data branches use 0x00 (direction flags only) â€” all correct, no further changes required.
+**Tests added (Windows):** `ata_flags_matches_wdk_constants` asserts DATA_OUT=0x04 / DATA_IN=0x02 and both `ata_flags` mappings; `ata_task_header_serializes_wdk_data_out_flag` serializes the header and asserts bytes 2..4 equal `0x04`. `cargo test --workspace` = 82 passed.
+**Why:** A data-carrying command with the wrong direction flag can be rejected, hang, or complete ambiguously on real hardware, which would undermine the "verified erase" claim in the signed report.
+**Alternative considered:** Leaving it as-is (compile-validated only) â€” rejected: it is a confirmed deviation from the WDK spec.
+**Risks remaining:** live-hardware execution still unverified on this host (tracked in `KNOWN_ISSUES.md` KO-1 / gap-plan P0 #2); must be closed with a documented real-device run before production claims.
+**macOS decision (gap-plan P1 #3):** explicitly out of scope â€” hardware paths already return `HardwareEraseError::Unsupported` at runtime on non-Windows/Linux (never silent no-op or fallthrough), so no `compile_error!` gate is needed; marketing copy does not claim macOS support.
