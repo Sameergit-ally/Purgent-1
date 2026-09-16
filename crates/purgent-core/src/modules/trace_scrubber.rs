@@ -262,7 +262,7 @@ fn shell_history_scrub(path: &Path, record: &mut TraceScrubRecord) {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 pub(crate) fn strip_history_lines(contents: &str, needle: &str) -> String {
     contents
         .lines()

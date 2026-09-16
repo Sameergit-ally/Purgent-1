@@ -117,12 +117,31 @@ impl CaseDb {
             .unwrap_or(0);
         self.conn
             .execute(
-                "INSERT OR REPLACE INTO report_records (
+                "INSERT INTO report_records (
                     report_id, operation_id, operation_type, operator_id, target,
                     standard_id, standard_label, capacity_bytes, start_time, finish_time,
                     verification_status, mismatched_sectors, skipped_sector_count,
                     report_hash, signature_alg, signature, json_path, pdf_path, json_content
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                ON CONFLICT(report_id) DO UPDATE SET
+                    operation_id = excluded.operation_id,
+                    operation_type = excluded.operation_type,
+                    operator_id = excluded.operator_id,
+                    target = excluded.target,
+                    standard_id = excluded.standard_id,
+                    standard_label = excluded.standard_label,
+                    capacity_bytes = excluded.capacity_bytes,
+                    start_time = excluded.start_time,
+                    finish_time = excluded.finish_time,
+                    verification_status = excluded.verification_status,
+                    mismatched_sectors = excluded.mismatched_sectors,
+                    skipped_sector_count = excluded.skipped_sector_count,
+                    report_hash = excluded.report_hash,
+                    signature_alg = excluded.signature_alg,
+                    signature = excluded.signature,
+                    json_path = excluded.json_path,
+                    pdf_path = excluded.pdf_path,
+                    json_content = excluded.json_content",
                 params![
                     report.report_id,
                     report.operation_id,

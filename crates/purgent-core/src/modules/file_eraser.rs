@@ -84,9 +84,12 @@ pub enum EraseVerificationStatus {
 pub struct EraseFileRecord {
     pub path: String,
     pub bytes_erased: u64,
+    pub bytes_verified: u64,
     pub mismatched_sectors: u64,
+    pub skipped_sectors: u64,
     pub verified: bool,
     pub deleted: bool,
+    pub trace_scrub: Option<super::trace_scrubber::TraceScrubRecord>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -101,6 +104,7 @@ pub struct FileEraseResult {
     pub files: Vec<EraseFileRecord>,
     pub directories_removed: u64,
     pub complete: bool,
+    pub skipped_sectors: u64,
     pub trace_scrub: Option<super::trace_scrubber::TraceScrubRecord>,
 }
 
@@ -162,6 +166,7 @@ pub fn erase_with_progress(
         operator_id: request.operator_id.clone(),
         files: Vec::new(),
         directories_removed: 0,
+        skipped_sectors: 0,
         complete: false,
         trace_scrub: None,
     };
@@ -271,6 +276,16 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), EraseError> {
     for entry in entries {
         let entry = entry.map_err(|e| EraseError::Io(e.to_string()))?;
         let path = entry.path();
+        if entry.file_type().map(|t| t.is_symlink()).unwrap_or(false) {
+            log::log(
+                "skipped",
+                &format!(
+                    "symlink={} NOT collected; wipe of folder refuses to follow links",
+                    path.display()
+                ),
+            );
+            continue;
+        }
         let meta = entry
             .metadata()
             .map_err(|e| EraseError::Io(format!("metadata {}: {e}", path.display())))?;
@@ -389,35 +404,58 @@ fn erase_one_file(
             EraseFileRecord {
                 path: path.display().to_string(),
                 bytes_erased: capacity,
+                bytes_verified: 0,
                 mismatched_sectors: mismatched,
+                skipped_sectors: 0,
                 verified: false,
                 deleted: false,
+                trace_scrub: None,
             },
             skipped_sectors,
         ));
     }
 
+    let fully_verified =
+        mismatched == 0 && bytes_verified == capacity && skipped_sectors.is_empty();
     drop(file);
-    let deleted = std::fs::remove_file(path).is_ok();
-    if deleted {
-        log::log(
-            "verified",
-            &format!("file={} deleted_ok=true", path.display()),
-        );
+    let deleted = if fully_verified {
+        let deleted = std::fs::remove_file(path).is_ok();
+        if deleted {
+            log::log(
+                "verified",
+                &format!("file={} deleted_ok=true", path.display()),
+            );
+        } else {
+            log::log(
+                "failed",
+                &format!("file={} deletion failed", path.display()),
+            );
+        }
+        deleted
     } else {
         log::log(
             "failed",
-            &format!("file={} deletion failed", path.display()),
+            &format!(
+                "file={} NOT deleted because verification was not fully clean \
+                 (mismatched={} verified={bytes_verified}/capacity={capacity} skipped={})",
+                path.display(),
+                mismatched,
+                skipped_sectors.len()
+            ),
         );
-    }
+        false
+    };
 
     Ok((
         EraseFileRecord {
             path: path.display().to_string(),
             bytes_erased: capacity,
-            mismatched_sectors: 0,
-            verified: true,
+            bytes_verified,
+            mismatched_sectors: mismatched,
+            skipped_sectors: skipped_sectors.len() as u64,
+            verified: fully_verified,
             deleted,
+            trace_scrub: None,
         },
         skipped_sectors,
     ))

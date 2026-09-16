@@ -651,13 +651,25 @@ mod tests {
             files: vec![EraseFileRecord {
                 path: "C:\\data\\vault\\a.txt".into(),
                 bytes_erased: 512,
+                bytes_verified: 512,
                 mismatched_sectors: 0,
+                skipped_sectors: 0,
                 verified: true,
                 deleted: true,
+                trace_scrub: Some(TraceScrubRecord {
+                    file_path: "C:\\data\\vault\\a.txt".into(),
+                    actions: vec![],
+                    scrubbed_at: "2026-09-13T10:00:02.000Z".into(),
+                }),
             }],
             directories_removed: 1,
             complete: true,
-            trace_scrub: None,
+            skipped_sectors: 0,
+            trace_scrub: Some(TraceScrubRecord {
+                file_path: "C:\\data\\vault".into(),
+                actions: vec![],
+                scrubbed_at: "2026-09-13T10:00:02.000Z".into(),
+            }),
         };
         let report = build_file_erase_report(&result, TEST_KEY);
         let json = report_to_json_string(&report);

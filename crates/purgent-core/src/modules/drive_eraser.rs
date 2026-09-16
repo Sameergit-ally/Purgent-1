@@ -24,6 +24,16 @@ pub enum WipeTarget {
     },
 }
 
+/// Single source of truth for the operator-confirm phrase of a physical device.
+/// The frontend renders this exact string via the `get_wipe_preview` command so a
+/// device wipe confirmation can always match.
+pub fn wipe_device_phrase(path: &str, capacity_bytes: u64, media_type: MediaType) -> String {
+    format!(
+        "device {path} ({capacity_bytes} bytes, {} media)",
+        media_type.label()
+    )
+}
+
 impl WipeTarget {
     pub fn display(&self) -> String {
         match self {
@@ -32,12 +42,7 @@ impl WipeTarget {
                 path,
                 capacity_bytes,
                 media_type,
-            } => {
-                format!(
-                    "device {path} ({capacity_bytes} bytes, {} media)",
-                    media_type.label()
-                )
-            }
+            } => wipe_device_phrase(path, *capacity_bytes, *media_type),
         }
     }
 
@@ -254,13 +259,14 @@ pub fn wipe_with_progress(
             capacity,
             block_size,
         )?);
-        log::log(
-            "evidence",
-            &format!(
-                "operation={operation_id} raw evidence hash captured before wipe (sha256={})",
-                evidence_hash.as_ref().expect("set above")
-            ),
-        );
+        if let Some(hash) = evidence_hash.as_ref() {
+            log::log(
+                "evidence",
+                &format!(
+                    "operation={operation_id} raw evidence hash captured before wipe (sha256={hash})"
+                ),
+            );
+        }
     }
 
     let mut file = request.target.open()?;
@@ -656,7 +662,11 @@ fn verify_pass(
     file.seek(SeekFrom::Start(0))
         .map_err(|e| WipeError::Io(e.to_string()))?;
 
-    let final_pass_index = spec.passes.len() - 1;
+    let Some(final_pass_index) = spec.passes.len().checked_sub(1) else {
+        return Err(WipeError::Io(
+            "wipe spec defines no passes to verify".into(),
+        ));
+    };
     let expected = spec.passes[final_pass_index];
 
     let mut expected_block = vec![0u8; block_size as usize];
@@ -674,10 +684,6 @@ fn verify_pass(
         } else {
             block_size as usize
         };
-        if chunk > expected_block.len() {
-            expected_block.resize(chunk, 0);
-            fill_pattern(&mut expected_block, expected, spec.seed, final_pass_index);
-        }
         let mut n = 0usize;
         match file
             .seek(SeekFrom::Start(offset))
@@ -693,15 +699,30 @@ fn verify_pass(
                 );
             }
         }
+        if n < chunk {
+            // Short read: the trailing byte range was not read back, so those bytes
+            // remain unverified and must fail the verification certificate.
+            if skipped_sectors.last().copied() != Some(offset / SECTOR_SIZE) {
+                skipped_sectors.push((offset + n as u64) / SECTOR_SIZE);
+            }
+            log::log(
+                "verifying",
+                &format!(
+                    "short read at offset {offset}: {n} of {chunk} bytes; trailing {} bytes unverified",
+                    chunk - n
+                ),
+            );
+        }
         if n > 0 {
             bytes_verified += n as u64;
-            let sector_count = n as u64 / SECTOR_SIZE;
-            for s in 0..sector_count {
-                let start = (s * SECTOR_SIZE) as usize;
-                let end = start + SECTOR_SIZE as usize;
-                if read_buf[start..end] != expected_block[start..end] {
+            // Compare every byte read back, including the partial trailing sector.
+            let mut compared = 0usize;
+            while compared < n {
+                let seg = core::cmp::min(SECTOR_SIZE as usize, n - compared);
+                if read_buf[compared..compared + seg] != expected_block[compared..compared + seg] {
                     mismatched_sectors += 1;
                 }
+                compared += seg;
             }
         }
         offset += chunk as u64;
@@ -717,7 +738,10 @@ fn verify_pass(
     expected_block.zeroize();
     read_buf.zeroize();
 
-    let (status, detail) = if mismatched_sectors == 0 {
+    // Fail hard: a "passed" certificate requires every byte of the target to be
+    // read back and matched. Unreadable, short-read, or skipped regions fail.
+    let fully_verified = mismatched_sectors == 0 && bytes_verified == capacity;
+    let (status, detail) = if fully_verified && skipped_sectors.is_empty() {
         (
             VerificationStatus::Passed,
             format!(
@@ -726,7 +750,14 @@ fn verify_pass(
             ),
         )
     } else {
-        (VerificationStatus::Failed, format!("read-back mismatch on {mismatched_sectors} sectors after {bytes_verified} bytes verified"))
+        (
+            VerificationStatus::Failed,
+            format!(
+                "read-back incomplete: bytes_verified={bytes_verified}/{capacity} unverified={} mismatched_sectors={mismatched_sectors} skipped_sectors={}",
+                capacity.saturating_sub(bytes_verified),
+                skipped_sectors.len()
+            ),
+        )
     };
 
     Ok(VerificationResult {
@@ -902,6 +933,65 @@ mod tests {
             "corrupted sector must be detected"
         );
         assert!(v.mismatched_sectors >= 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn device_wipe_phrase_matches_target_display() {
+        let target = WipeTarget::Device {
+            path: "\\\\.\\PHYSICALDRIVE0".into(),
+            capacity_bytes: 100_020_488_6016,
+            media_type: crate::modules::storage::MediaType::Nvme,
+        };
+        assert_eq!(
+            target.display(),
+            wipe_device_phrase(
+                "\\\\.\\PHYSICALDRIVE0",
+                100_020_488_6016,
+                crate::modules::storage::MediaType::Nvme
+            )
+        );
+        assert!(target.display().contains(", NVMe media)"));
+    }
+
+    #[test]
+    fn verification_detects_corrupted_partial_tail_sector() {
+        let dir = std::env::temp_dir().join(format!("purgent-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tail.img");
+        make_image(&path, 1024 * 512 + 100, 0x00);
+        {
+            // Corrupt the 100-byte partial tail sector (offset 524288 .. 524388).
+            let mut w = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap();
+            w.seek(SeekFrom::Start(1024 * 512)).unwrap();
+            w.write_all(&[0xAB; 100]).unwrap();
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let spec = crate::modules::config::wipe_spec(WipeStandard::Nist800_88Clear);
+        let mut skipped = Vec::new();
+        let v = verify_pass(
+            &mut f,
+            std::fs::metadata(&path).unwrap().len(),
+            &spec,
+            4096,
+            &mut skipped,
+            "test-op",
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            v.status,
+            VerificationStatus::Failed,
+            "corrupted partial tail sector must be detected"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
