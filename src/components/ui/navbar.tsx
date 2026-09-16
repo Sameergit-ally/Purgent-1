@@ -22,11 +22,11 @@ export function Navbar({ onOpenConsole, onNavigateSection }: NavbarProps) {
 
   const navLinks = [
     { label: "Capabilities", href: "#features" },
-    { label: "Architecture", href: "#features" },
-    { label: "Compliance Standards", href: "#standards" },
+    { label: "Compliance & FAQ", href: "#faq" },
   ];
 
-  const handleLinkClick = (href: string) => {
+  const handleLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    e.preventDefault();
     setMobileMenuOpen(false);
     if (onNavigateSection) {
       onNavigateSection(href.replace("#", ""));
@@ -70,7 +70,7 @@ export function Navbar({ onOpenConsole, onNavigateSection }: NavbarProps) {
             <a
               key={link.label}
               href={link.href}
-              onClick={() => handleLinkClick(link.href)}
+              onClick={(e) => handleLinkClick(e, link.href)}
               className="px-4 py-1.5 text-xs font-sans font-medium text-[#8E9DB8] hover:text-white hover:bg-[#10192C] rounded-full transition-all"
             >
               {link.label}
@@ -109,7 +109,7 @@ export function Navbar({ onOpenConsole, onNavigateSection }: NavbarProps) {
               <a
                 key={link.label}
                 href={link.href}
-                onClick={() => handleLinkClick(link.href)}
+                onClick={(e) => handleLinkClick(e, link.href)}
                 className="text-base font-medium text-white hover:text-[#38BDF8] transition-colors py-1"
               >
                 {link.label}

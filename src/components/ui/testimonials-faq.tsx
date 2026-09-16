@@ -8,29 +8,29 @@ export function TestimonialsFaq() {
     {
       featured: true,
       quote:
-        "In military and federal audit depositions, our biggest liability was proving that an SSD wasn't simply zero-filled at the host OS layer while retaining wear-leveled NAND blocks. Purgent's hardware-direct NVMe Sanitize handshake with cryptographic readback certificates passed Defense Counterintelligence inspection on the first submission.",
-      author: "Marcus Vance",
-      role: "Director of Defensive Cyber Operations",
-      org: "Sovereign Defense Systems",
-      metric: "0 audit inquiries across 4,200 arrays",
+        "The ability to issue direct hardware sanitize commands and receive a signed readback verification certificate transforms how we document SSD evidence integrity for audit and chain-of-custody.",
+      author: "Role-based scenario",
+      role: "Defensive cyber operations team",
+      org: "Illustrative use case — replace with verified results",
+      metric: "demo metric placeholder",
     },
     {
       featured: false,
       quote:
-        "Having file carving and permanent sanitization in the same tool with a unified tamper-evident SQLite ledger cut our chain-of-custody reconciliation time from 3 hours per case to zero.",
-      author: "Dr. Elena Rostova",
-      role: "Lead Digital Forensics Examiner",
-      org: "Metropolitan Incident Response Lab",
-      metric: "99.4% confidence on bifragment recoveries",
+        "Combining file carving and permanent sanitization with a unified signed audit ledger drastically streamlines chain-of-custody reconciliation.",
+      author: "Role-based scenario",
+      role: "Digital forensics examiner",
+      org: "Illustrative use case",
+      metric: "placeholder",
     },
     {
       featured: false,
       quote:
-        "The air-gapped guarantees are real. Purgent doesn't attempt any background outbound pings or telemetry. Our scif workstations run clean and without exception.",
-      author: "Julian Chen",
-      role: "Senior Security Architect",
-      org: "FinTech Infrastructure Corp",
-      metric: "100% air-gapped compliance",
+        "Air-gapped operation is genuinely local-first — no background network calls, no telemetry. Audit data stays fully under the examiner's control.",
+      author: "Role-based scenario",
+      role: "Security architect",
+      org: "Illustrative use case",
+      metric: "placeholder",
     },
   ];
 
@@ -48,17 +48,17 @@ export function TestimonialsFaq() {
     {
       question: "Does Purgent require internet connectivity or cloud telemetry to function?",
       answer:
-        "Never. Purgent is designed from the ground up for air-gapped, zero-trust scif environments. Local SQLite audit databases and Ed25519-signed reports are fully authoritative on the host machine. Cloud synchronization to Supabase is an optional, opt-in mirror for enterprise oversight.",
+        "Never. Purgent is designed from the ground up for air-gapped, zero-trust scif environments. Local SQLite audit databases and HMAC-SHA256 signed reports are fully authoritative on the host machine. (Ed25519 asymmetric signing is on the roadmap.) Cloud synchronization to Supabase is an optional, opt-in mirror for enterprise oversight.",
     },
     {
       question: "What happens when bad sectors or read errors are encountered during a wipe?",
       answer:
-        "Purgent logs the exact sector address and LBA offset to the audit report, marks the sector as skipped, and continues the sanitization pass. If the skipped sector threshold is exceeded, the certificate notes that physical destruction (NIST 800-88 Destroy category) is required for compliance.",
+        "Purgent logs the exact sector address and LBA offset to the audit report, marks the sector as skipped with an incrementing count, and continues the pass. The signed report records the final skipped-sector count for the examiner to review; there is no automatic threshold that changes the operation's outcome.",
     },
     {
       question: "Are the generated PDF and JSON audit certificates accepted in legal proceedings?",
       answer:
-        "Yes. Each certificate includes the full hardware identification (model, serial number, capacity bytes), the exact standard invoked (e.g. NIST 800-88 Rev.1 Purge), operator ID, start and completion timestamps, read-back verification status, and an HMAC/Ed25519 cryptographic digital signature.",
+        "Yes. Each certificate includes the full hardware identification (model, serial number, capacity bytes), the exact standard invoked (e.g. NIST 800-88 Rev.1 Purge), operator ID, start and completion timestamps, read-back verification status, and an HMAC-SHA256 cryptographic digital signature.",
     },
   ];
 
@@ -68,14 +68,15 @@ export function TestimonialsFaq() {
         {/* Testimonials Block */}
         <div className="mb-24">
           <div className="max-w-3xl mb-12">
-            <div className="text-xs font-mono text-[#38BDF8] tracking-widest uppercase mb-3 font-semibold">
-              Forensic Case Evidence
+<div className="text-xs font-mono text-[#38BDF8] tracking-widest uppercase mb-3 font-semibold">
+              Illustrative Use-Case Scenarios
             </div>
             <h2 className="font-serif text-3xl sm:text-4xl font-semibold tracking-tight text-white mb-4">
-              Tested in high-stakes environments.
+              Example scenarios — replace with verified results.
             </h2>
             <p className="text-[#8E9DB8] text-sm sm:text-base">
-              Real feedback from forensic practitioners, defense auditors, and enterprise examiners.
+              Placeholder attributions shown for layout reference; replace with actual user feedback
+              once available.
             </p>
           </div>
 

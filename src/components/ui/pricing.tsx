@@ -1,11 +1,7 @@
 import { useState } from "react";
 import { Check, Minus } from "lucide-react";
 
-interface PricingProps {
-  onOpenConsole?: () => void;
-}
-
-export function Pricing({ onOpenConsole }: PricingProps) {
+export function Pricing() {
   const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("yearly");
 
   const tiers = [
@@ -22,11 +18,12 @@ export function Pricing({ onOpenConsole }: PricingProps) {
         { label: "Signature & structure file carving", included: true },
         { label: "PDF erasure certificates & JSON logs", included: true },
         { label: "Air-gapped local SQLite storage", included: true },
-        { label: "Centralized Supabase audit sync", included: false },
-        { label: "Custom cryptographic signing keys", included: false },
-        { label: "Enterprise multi-operator role policies", included: false },
+        { label: "Centralized Supabase audit sync (env-gated opt-in)", included: true },
+        { label: "Custom cryptographic signing keys (Planned)", included: false },
+        { label: "Enterprise multi-operator role policies (Planned)", included: false },
       ],
       cta: "Acquire License",
+      ctaHref: "mailto:sales@purgent.dev?subject=License%20inquiry%20-%20Field%20Investigator",
       recommended: false,
     },
     {
@@ -42,11 +39,12 @@ export function Pricing({ onOpenConsole }: PricingProps) {
         { label: "Signature & structure file carving", included: true },
         { label: "PDF erasure certificates & JSON logs", included: true },
         { label: "Air-gapped local SQLite storage", included: true },
-        { label: "Centralized Supabase audit sync", included: true },
-        { label: "Custom cryptographic signing keys", included: true },
-        { label: "Enterprise multi-operator role policies", included: true },
+        { label: "Centralized Supabase audit sync (env-gated opt-in)", included: true },
+        { label: "Custom cryptographic signing keys (Planned)", included: false },
+        { label: "Enterprise multi-operator role policies (Planned)", included: false },
       ],
       cta: "Deploy Fleet",
+      ctaHref: "mailto:sales@purgent.dev?subject=Enterprise%20deployment%20inquiry",
       recommended: true,
     },
     {
@@ -62,11 +60,12 @@ export function Pricing({ onOpenConsole }: PricingProps) {
         { label: "Signature & structure file carving", included: true },
         { label: "PDF erasure certificates & JSON logs", included: true },
         { label: "Air-gapped local SQLite storage", included: true },
-        { label: "PKCS#11 Hardware Security Module support", included: true },
-        { label: "Custom firmware sanitization profiles", included: true },
-        { label: "Dedicated compliance SLA & engineer support", included: true },
+        { label: "PKCS#11 Hardware Security Module support (Planned)", included: false },
+        { label: "Custom firmware sanitization profiles (Planned)", included: false },
+        { label: "Dedicated compliance SLA & engineer support (Planned)", included: false },
       ],
       cta: "Contact Defense Sales",
+      ctaHref: "mailto:sales@purgent.dev?subject=Sovereign%2FLab%20node%20inquiry",
       recommended: false,
     },
   ];
@@ -187,7 +186,9 @@ export function Pricing({ onOpenConsole }: PricingProps) {
                 {/* Card CTA button */}
                 <button
                   type="button"
-                  onClick={onOpenConsole}
+                  onClick={() => {
+                    window.location.href = tier.ctaHref;
+                  }}
                   className={`w-full py-3.5 px-4 font-semibold text-xs tracking-wide transition-all ${
                     tier.recommended
                       ? "neu-btn-primary"
@@ -200,6 +201,11 @@ export function Pricing({ onOpenConsole }: PricingProps) {
             );
           })}
         </div>
+
+        <p className="mt-10 text-center text-xs font-mono text-[#8E9DB8]">
+          Demo pricing model — feature tiers are illustrative. Items marked "(Planned)" are on the
+          roadmap and not yet enforced by the product.
+        </p>
       </div>
     </section>
   );

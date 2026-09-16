@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Navbar } from "./components/ui/navbar";
 import { LandingPage } from "./components/ui/landing-page";
+import { Clock } from "./components/ui/Clock";
 import ConstellationGrid from "./components/ui/constellation-grid";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import logoImg from "./assets/logo.png";
@@ -162,11 +163,20 @@ function App() {
   const [active, setActive] = useState<Record<string, ProgressUpdate>>({});
   const [lastOutcome, setLastOutcome] = useState<OperationOutcome | null>(null);
   const [error, setError] = useState<string>("");
+  const [successNotice, setSuccessNotice] = useState("");
   const [tab, setTab] = useState<Tab>("wipe");
 
 
   const [operatorInput, setOperatorInput] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+
+  const clearBusy = useCallback((id: string) => {
+    setBusy((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   const [wipeTargetKind, setWipeTargetKind] = useState<"device" | "file">("file");
   const [wipePath, setWipePath] = useState("");
@@ -191,16 +201,10 @@ function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
 
-  const [now, setNow] = useState<Date>(new Date());
   const sessionId = useMemo(
     () => `SECURE-SESSION-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
     []
   );
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   const refreshReports = useCallback(async () => {
     try {
@@ -276,14 +280,16 @@ function App() {
           /* best effort */
         }
         try {
-          setWipeStandards(await invoke<StdInfo[]>("get_wipe_standards"));
-          setWipeStandard((await invoke<StdInfo[]>("get_wipe_standards"))[0]?.id ?? "");
+          const wStandards = await invoke<StdInfo[]>("get_wipe_standards");
+          setWipeStandards(wStandards);
+          setWipeStandard(wStandards[0]?.id ?? "");
         } catch {
           /* best effort */
         }
         try {
-          setEraseStandards(await invoke<StdInfo[]>("get_erase_standards"));
-          setEraseStandard((await invoke<StdInfo[]>("get_erase_standards"))[0]?.id ?? "");
+          const eStandards = await invoke<StdInfo[]>("get_erase_standards");
+          setEraseStandards(eStandards);
+          setEraseStandard(eStandards[0]?.id ?? "");
         } catch {
           /* best effort */
         }
@@ -359,14 +365,14 @@ function App() {
           unlisteners.push(
             await listen<OperationOutcome>("operation-complete", (event) => {
               setLastOutcome(event.payload);
-              setBusy((prev) => ({ ...prev, [event.payload.operation_id]: false }));
+              clearBusy(event.payload.operation_id);
               refreshReports();
             })
           );
           unlisteners.push(
             await listen<{ operation_id: string; error: string }>("operation-error", (event) => {
               setError(`operation ${event.payload.operation_id} failed: ${event.payload.error}`);
-              setBusy((prev) => ({ ...prev, [event.payload.operation_id]: false }));
+              clearBusy(event.payload.operation_id);
             })
           );
           unlisteners.push(
@@ -435,6 +441,7 @@ function App() {
       }
       setWipeFallbackPending(false);
       setWipeFallbackError("");
+      clearBusy(opKey);
     } catch (e) {
       const msg = `${e}`;
       if (msg.includes("RequiresFallbackAck") || msg.includes("overwrite fallback denied")) {
@@ -446,7 +453,7 @@ function App() {
         setWipeFallbackPending(false);
         setWipeFallbackError("");
       }
-      setBusy((prev) => ({ ...prev, [opKey]: false }));
+      clearBusy(opKey);
     }
   };
 
@@ -474,9 +481,10 @@ function App() {
         standardId: eraseStandard,
         confirmed: eraseConfirm,
       });
+      clearBusy(opKey);
     } catch (e) {
       setError(`erase failed: ${e}`);
-      setBusy((prev) => ({ ...prev, [opKey]: false }));
+      clearBusy(opKey);
     }
   };
 
@@ -490,9 +498,10 @@ function App() {
         source: carveSource,
         outputDir: carveOutput,
       });
+      clearBusy(opKey);
     } catch (e) {
       setError(`carve failed: ${e}`);
-      setBusy((prev) => ({ ...prev, [opKey]: false }));
+      clearBusy(opKey);
     }
   };
 
@@ -518,8 +527,9 @@ function App() {
     try {
       const path = await invoke<string>("export_report_xml", { filename });
       setError("");
-      alert(`XML certificate exported:\n${path}`);
+      setSuccessNotice(`XML certificate exported:\n${path}`);
     } catch (e) {
+      setSuccessNotice("");
       setError(`export_report_xml failed: ${e}`);
     }
   };
@@ -635,7 +645,9 @@ function App() {
                 NODE://{identity?.fingerprint ? identity.fingerprint.slice(0, 12) : "…"}
               </div>
               <div className="sb-cell font-mono">SESSION: {sessionId}</div>
-              <div className="sb-cell font-mono">UTC {now.toISOString().slice(11, 19)}</div>
+              <div className="sb-cell font-mono">
+                  <Clock />
+                </div>
               <div className="sb-cell">
                 <span className="dot ok" /> AIR-GAPPED READY
               </div>
@@ -670,11 +682,15 @@ function App() {
 
             <section className="identity-bar">
               <div>
-                <label className="text-xs font-mono text-[#8C8A7C] uppercase tracking-wider block mb-1">
+                <label
+                  htmlFor="operator-input"
+                  className="text-xs font-mono text-[#8C8A7C] uppercase tracking-wider block mb-1"
+                >
                   Operator Identity
                 </label>
                 <span className="inline-row">
                   <input
+                    id="operator-input"
                     value={operatorInput}
                     onChange={(e) => setOperatorInput(e.target.value)}
                     placeholder="Enter Operator ID"
@@ -692,6 +708,13 @@ function App() {
               )}
             </section>
 
+
+      {successNotice && (
+        <section className="banner success">
+          <span className="whitespace-pre-wrap">{successNotice}</span>
+          <button onClick={() => setSuccessNotice("")}>dismiss</button>
+        </section>
+      )}
 
       {error && (
         <section className="banner error">
@@ -758,8 +781,9 @@ function App() {
           {tab === "wipe" && (
             <div className="task">
               <h2>Secure Erase</h2>
-              <label>Target type</label>
+              <label htmlFor="wipe-target-type">Target type</label>
               <select
+                id="wipe-target-type"
                 value={wipeTargetKind}
                 onChange={(e) => setWipeTargetKind(e.target.value as "device" | "file")}
               >
@@ -769,9 +793,10 @@ function App() {
 
               {wipeTargetKind === "file" ? (
                 <>
-                  <label>Path to disk image</label>
+                  <label htmlFor="wipe-path">Path to disk image</label>
                   <input
-                    placeholder="C:\path\to\disk.img"
+                    id="wipe-path"
+                    placeholder={"C:\\path\\to\\disk.img"}
                     value={wipePath}
                     onChange={(e) => {
                       setWipePath(e.target.value);
@@ -805,19 +830,28 @@ function App() {
                 </>
               )}
 
-              <label>Standard</label>
-              <select value={wipeStandard} onChange={(e) => setWipeStandard(e.target.value)}>
-                {wipeStandards.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
+              <label htmlFor="wipe-standard">Standard</label>
+              <select id="wipe-standard" value={wipeStandard} onChange={(e) => setWipeStandard(e.target.value)}>
+                {wipeStandards
+                  .filter((s) => wipeTargetKind === "device" || !isHardwareStandard(s.id))
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
               </select>
+              {wipeTargetKind === "file" && isHardwareStandard(wipeStandard) && (
+                <p className="hint" style={{ color: "#b0503c" }}>
+                  Hardware-backed methods apply to physical devices only — select a physical
+                  device to use this standard.
+                </p>
+              )}
 
-              <label>Confirm target — type exactly</label>
+              <label htmlFor="wipe-confirm">Confirm target — type exactly</label>
               <div className="conf">
                 <code>{wipeExpected || "…"}</code>
                 <input
+                  id="wipe-confirm"
                   placeholder="type the exact phrase above"
                   value={wipeConfirm}
                   onChange={(e) => setWipeConfirm(e.target.value)}
@@ -868,8 +902,9 @@ function App() {
           {tab === "erase" && (
             <div className="task">
               <h2>Erase Files / Folder</h2>
-              <label>Target type</label>
+              <label htmlFor="erase-target-type">Target type</label>
               <select
+                id="erase-target-type"
                 value={eraseKind}
                 onChange={(e) => {
                   setEraseKind(e.target.value as "file" | "folder");
@@ -879,27 +914,29 @@ function App() {
                 <option value="file">Single file (overwrite + delete)</option>
                 <option value="folder">Folder (all contained files)</option>
               </select>
-              <label>Path</label>
+              <label htmlFor="erase-path">Path</label>
               <input
-                placeholder={eraseKind === "file" ? "C:\path\to\file" : "C:\path\to\folder"}
+                id="erase-path"
+                placeholder={eraseKind === "file" ? "C:\\path\\to\\file" : "C:\\path\\to\\folder"}
                 value={erasePath}
                 onChange={(e) => {
                   setErasePath(e.target.value);
                   setEraseConfirm("");
                 }}
               />
-              <label>Standard</label>
-              <select value={eraseStandard} onChange={(e) => setEraseStandard(e.target.value)}>
+              <label htmlFor="erase-standard">Standard</label>
+              <select id="erase-standard" value={eraseStandard} onChange={(e) => setEraseStandard(e.target.value)}>
                 {eraseStandards.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.label}
                   </option>
                 ))}
               </select>
-              <label>Confirm target — type exactly</label>
+              <label htmlFor="erase-confirm">Confirm target — type exactly</label>
               <div className="conf">
                 <code>{eraseExpected || "…"}</code>
                 <input
+                  id="erase-confirm"
                   placeholder="type the exact phrase above"
                   value={eraseConfirm}
                   onChange={(e) => setEraseConfirm(e.target.value)}
@@ -918,15 +955,17 @@ function App() {
                 Scans a source read-only for embedded file signatures and reconstructs files into
                 the output folder. Recovered files are validated and scored.
               </p>
-              <label>Source (read-only)</label>
+              <label htmlFor="carve-source">Source (read-only)</label>
               <input
-                placeholder="C:\path\to\source.img"
+                id="carve-source"
+                placeholder={"C:\\path\\to\\source.img"}
                 value={carveSource}
                 onChange={(e) => setCarveSource(e.target.value)}
               />
-              <label>Output folder</label>
+              <label htmlFor="carve-output">Output folder</label>
               <input
-                placeholder="C:\path\to\recovered"
+                id="carve-output"
+                placeholder={"C:\\path\\to\\recovered"}
                 value={carveOutput}
                 onChange={(e) => setCarveOutput(e.target.value)}
               />

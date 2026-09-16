@@ -1,9 +1,11 @@
 import { Hero } from "./hero";
 import { FeaturesGrid } from "./features-grid";
+import { Pricing } from "./pricing";
+import { TestimonialsFaq } from "./testimonials-faq";
 import { CtaFooter } from "./cta-footer";
 
 interface LandingPageProps {
-  onOpenConsole: () => void;
+  onOpenConsole?: () => void;
 }
 
 export function LandingPage({ onOpenConsole }: LandingPageProps) {
@@ -11,6 +13,8 @@ export function LandingPage({ onOpenConsole }: LandingPageProps) {
     <div className="min-h-screen bg-[#0B111E] text-white selection:bg-[#38BDF8]/30 selection:text-white">
       <Hero onOpenConsole={onOpenConsole} />
       <FeaturesGrid />
+      <Pricing />
+      <TestimonialsFaq />
       <CtaFooter onOpenConsole={onOpenConsole} />
     </div>
   );
