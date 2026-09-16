@@ -52,6 +52,8 @@ closes that gap:
 | 📶 **Optional sync** | Opt-in upload of report *metadata* to Supabase REST with retry + dedup (never file contents) |
 | 🌐 **Cross-platform** | Windows (x64) primary, Linux (x64) via Ubuntu CI re-verified on every push |
 
+> 📖 Full feature list → [`FEATURES.md`](FEATURES.md) · Step-by-step usage → [`USAGE_GUIDE.md`](USAGE_GUIDE.md)
+
 ---
 
 ## Standards compliance
@@ -171,6 +173,24 @@ cargo run --example wipe_demo     # exercise the core engine end-to-end on a tem
 
 ---
 
+## Documentation
+
+| File | What it is (1 line) |
+| --- | --- |
+| [`README.md`](README.md) | Project overview, features, stack, setup, and roadmap. |
+| [`USAGE_GUIDE.md`](USAGE_GUIDE.md) | Step-by-step instructions for every feature — wipe, file delete, recovery, reports, sync. |
+| [`FEATURES.md`](FEATURES.md) | Complete, category-by-category feature inventory. |
+| [`LEARNING.md`](LEARNING.md) | Hackathon prep — theory notes + judge-style Q&A. |
+| [`Purgent_Project_Verification_Report.md`](Purgent_Project_Verification_Report.md) | External verification & gap-analysis report (v3). |
+| [`Purgent_Frontend_TODO.md`](Purgent_Frontend_TODO.md) | Frontend code-review fix list (all items completed). |
+| [`DECISIONS (4).md`](DECISIONS%20(4).md) | Engineering decision log (append-only). |
+| [`PROJECT (4).md`](PROJECT%20(4).md) | Project plan and phase definitions. |
+| [`AGENTS (4).md`](AGENTS%20(4).md) | Agent guidelines for working in this repo. |
+| [`RULES (2).md`](RULES%20(2).md) | Hard safety and operating rules. |
+| [`frontend-design-prompts.md`](frontend-design-prompts.md) | Frontend design scratch notes. |
+
+---
+
 ## Repository layout
 
 ```
@@ -178,9 +198,10 @@ cargo run --example wipe_demo     # exercise the core engine end-to-end on a tem
 ├── src/                     React frontend (components, assets, styles)
 ├── src-tauri/               Tauri v2 shell + IPC commands + icons
 ├── .github/workflows/       Ubuntu CI
+├── USAGE_GUIDE.md / FEATURES.md / LEARNING.md
 ├── Purgent_Project_Verification_Report.md
-├── DECISIONS.md             decision log
-└── PROJECT.md / AGENTS.md / RULES.md
+├── DECISIONS (4).md         decision log
+└── PROJECT (4).md / AGENTS (4).md / RULES (2).md
 ```
 
 ---

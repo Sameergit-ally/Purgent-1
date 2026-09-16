@@ -1,196 +1,121 @@
-# Purgent — User Guide (Step-by-Step)
+# Purgent — Usage Guide (Step-by-Step)
 
-How to install, run, and use every feature of Purgent, in numbered steps.
+Agar tumne app kholna hai, sabse pehle ye 2 maamle karo:
 
----
-
-## 1. Run the project
-
-### Prerequisites
-- **Node.js 20+** and **npm**
-- **Rust** toolchain (stable)
-- **Windows:** MSVC C++ Build Tools ("Desktop development with C++") + WebView2 Runtime
-- **Linux:** GTK / WebKit dependencies — see the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/)
-
-### Step 1 — Install dependencies
-```
-npm install
-```
-
-### Step 2A — Run the desktop app (full functionality)
-```
+```sh
 npm run tauri dev
 ```
-Builds the Rust engine and opens the native desktop window.
 
-### Step 2B — Run the browser preview only (no hardware access)
-```
-npm run dev
-```
-Opens Vite at `http://localhost:1420`. The browser preview **cannot** issue device ioctls —
-hardware wipe/HPA-DCO features need the desktop shell. Use it only to preview the UI.
-
-### Step 3 — Build & test (optional)
-```
-npm run build              # typecheck + production frontend build
-cargo test --workspace     # run the engine test suite
-npm run tauri build        # production desktop installer
-```
+App ka desktop window khul jayega. Landing page par click karo: **Launch Desktop Console**.
+*Hint: yahi app ka main console hai — yahan sab features chalenge.*
 
 ---
 
-## 2. Set your operator identity
+## Feature 1 — Drive / Disk Wipe (Secure Erase)
 
-Every operation is recorded under an operator ID so your reports are attributable.
+Ek pure drive ko permanently wipe karne ke liye.
 
-1. Open the desktop console (click **Launch Desktop Console** on the landing page).
-2. In the **Operator Identity** box, type your operator ID (e.g. `DFIR-OPR-40291`).
-3. Click **Set identity**.
-4. Your fingerprint and audit vault path appear under **Fingerprint / Audit Vault**.
+- **Step 1:** Console mein **Secure Erase** tab kholo.
+  *Hint: top par 4 tabs hain — Secure Erase, Erase Files, Recovery, Reports.*
 
-> The app auto-loads your saved identity on next launch.
+- **Step 2:** Target type choose karo — `Physical device (admin required)` ya `Image file (recommended)`.
+  *Hint: real drive ke liye "Physical device", test file ke liye "Image file".*
 
----
+- **Step 3:** (Device wala) Device dropdown se apni drive choose karo.
+  *Hint: model/serial/capacity dhyan se dekh lo — is drive ka poora data wipe hoga, laut kar nahi aayega.*
 
-## 3. Secure Erase — drive or image file
+- **Step 4:** Standard choose karo:
+  - `ATA Secure Erase (in-band)` → SATA drive ke liye
+  - `NVMe Sanitize — Crypto Erase (in-band)` → NVMe drive ke liye
+  - ya overwrite wale: `NIST SP 800-88 Clear`, `DoD 5220.22-M`, etc.
+  *Hint: image file target hone par hardware standards chhup jate hain — woh sirf real devices ke liye hain.*
 
-### 3A. Erase an image file (file target)
-1. In the console, open the **Secure Erase** tab.
-2. Set **Target type** to `Image file (recommended)`.
-3. In **Path to disk image**, enter the full path, e.g. `C:\cases\disk.img`.
-4. Choose a **Standard** (hardware methods are automatically hidden for file targets):
-   - NIST SP 800-88 Rev.1 Clear
-   - NIST SP 800-88 Rev.1 Purge
-   - DoD 5220.22-M
-   - IEEE 2883-2022 Purge
-   - ISO/IEC 27037 Evidence Handling
-5. In **Confirm target — type exactly**, type the exact phrase shown above the box.
-6. Click **Begin secure erase**.
-7. Watch progress in the **Progress Monitor**; when done, the report appears in
-   **Reports & Compliance**.
+- **Step 5:** "Confirm target — type exactly" wale box mein wahi phrase type karo jo neeche dikh raha hai.
+  *Hint: exact copy type karo — galti pe operation refuse ho jayega (ye security feature hai).*
 
-### 3B. Erase a physical device (admin required)
-1. In the console, open the **Secure Erase** tab.
-2. Set **Target type** to `Physical device (admin required)`.
-3. Pick your drive from the **Device** dropdown. Verify the model/serial/capacity carefully —
-   this wipes **every sector**.
-4. Choose a **Standard**:
-   - **ATA Secure Erase (in-band)** — SATA drives
-   - **NVMe Sanitize — Crypto Erase (in-band)** — NVMe drives
-   - Any overwrite standard (NIST Clear / Purge, DoD 5220.22-M, IEEE 2883-2022, ISO 27037)
-5. Type the **exact** confirmation phrase (device id + capacity).
-6. Click **Begin secure erase**.
+- **Step 6:** **Begin secure erase** par click karo.
+  *Hint: Progress Monitor mein live progress dikhega.*
 
-> **Fallback acknowledgement:** if the hardware can't honor the command, Purgent **never**
-> silently downgrades. A dialog asks you to either:
-> - **"I acknowledge the overwrite fallback"** — continues with a verified pseudo-random overwrite
->   (the report records the method + reason), or
-> - **"Cancel — do not attempt fallback"** — aborts with no change to the drive.
-
-### 3C. HPA / DCO removal (automatic on device wipes)
-During a device wipe, Purgent automatically:
-1. Reads the ATA IDENTIFY data (`storage/hpa_dco.rs`).
-2. Detects Host Protected Area (HPA) / Device Configuration Overlay (DCO).
-3. Issues **SET MAX ADDRESS** (0xF9 / EXT 0x37) and **DCO RESET** (0xB1) task files.
-4. Re-queries IDENTIFY to verify native capacity is restored.
-
-To confirm it happened, open the report and check the **hpa/dco removal** line:
-`sent_hpa=true · sent_dco=true · removed=true`.
+- **Step 7:** Agar hardware erase fail ho (kabhi kabhi drive command nahi maanti) — ek dialog aayega:
+  - **"I acknowledge the overwrite fallback"** → overwrite se wipe hoga (report mein reason record hoga)
+  - **"Cancel"** → drive bilkul chhu nahi jayega
+  *Hint: Purgent kabhi silently fallback nahi karta — tumhari permission zaroori hai.*
 
 ---
 
-## 4. Erase files / folders
+## Feature 2 — File / Folder Secure Delete
 
-1. Open the **Erase Files** tab.
-2. Set **Target type** to `Single file` or `Folder (all contained files)`.
-3. Enter the **Path**, e.g. `C:\cases\file.pdf` or `C:\cases\folder`.
-4. Choose a **Standard**:
-   - NIST SP 800-88 Rev.1 Clear (1 pass)
-   - Purge (3 pass): zeros, 0xFF, random
-5. Type the **exact** confirmation phrase.
-6. Click **Begin file erase**.
+Ek file ya folder ko destroy nasha (overwrite + verify + delete).
 
-> Each file is overwritten, **verified**, and only then deleted. The file's final-sector slack
-> space is scrubbed (best-effort), and metadata/trace scrub actions are honestly logged
-> (`Ok` / `BestEffort` / `Skipped`) in the report.
+- **Step 1:** **Erase Files** tab kholo.
 
----
+- **Step 2:** Target type choose karo — `Single file` ya `Folder (all contained files)`.
+  *Hint: folder select karoge to andar ki saari files erase hongi.*
 
-## 5. Recovery (file carving)
+- **Step 3:** **Path** mein full path daalo, e.g. `C:\cases\oldfile.pdf`.
+  *Hint: path sahi ho — galat file delete hogi to recover nahi ho paayegi.*
 
-1. Open the **Recovery** tab.
-2. In **Source (read-only)**, enter the disk image or drive path to scan —
-   e.g. `C:\cases\source.img`. The source is opened read-only.
-3. In **Output folder**, enter where recovered files should be saved —
-   e.g. `C:\cases\recovered`.
-4. Click **Begin recovery**.
-5. Purgent scans for signatures (JPEG, PNG, GIF, BMP, PDF, MP4, DOCX, ZIP), validates structure,
-   reconstructs fragmented files, and scores confidence.
-6. Open **Reports & Compliance** to see the recovered files, categories, and per-file SHA-256 hashes.
+- **Step 4:** Standard choose karo:
+  - `NIST SP 800-88 Rev.1 Clear (1 pass)`
+  - `Purge (3 pass): zeros, 0xFF, random`
+  *Hint: 3-pass zyada safe hai, 1-pass quick hai.*
+
+- **Step 5:** Exact confirmation phrase type karo → **Begin file erase** click karo.
+
+- **Step 6:** Result — file overwrite → read-back **verify** → phir **delete**.
+  *Hint: agar file kisi program mein khuli hai (in-use), to erase refuse ho jayega — pehle usse band karo.*
 
 ---
 
-## 6. Reports & Compliance (evidence review)
+## Feature 3 — Recover Deleted Files (Carving)
 
-1. Open the **Reports & Compliance** tab.
-2. The **Certificate Vault** table lists every operation with Status / Type / Target / Standard /
-   Operator / Started.
-   - `verified` = valid HMAC-SHA256 signature · `INVALID` = tampered.
-3. Click **view** on a row to open the full report:
-   - Check **method**, **evidence sha256**, **hpa/dco**, **hpa/dco removal**, **trace scrub**,
-     **categories**, verification status + mismatched-sector count.
-   - The signed payload is shown as JSON at the bottom.
-4. Click **PDF** next to a row (or **Open PDF certificate**) to open the PDF report.
-5. Click **Export XML certificate** to save the machine-readable XML; **Open XML certificate** to
-   view it.
-6. **Compliance Matrix · LEGAL GRID**: report × operation × verification × mismatch × signature ×
-   hash — click a row to populate the detail columns.
-7. **Attached Storage & Write-Block Matrix**: lists detected devices, bus, media, capacity,
-   removable status.
+Purani deleted files ki disk se wapas nikaalna.
 
----
+- **Step 1:** **Recovery** tab kholo.
+  *Hint: recovery source hamesha read-only use hota hai — source pe kuch write nahi hota.*
 
-## 7. Cloud sync (optional, Supabase)
+- **Step 2:** **Source (read-only)** mein disk image / drive ka path daalo, e.g. `C:\cases\source.img`.
 
-Sync mirrors report **metadata only** (never file contents) to Supabase.
+- **Step 3:** **Output folder** daalo jahan recovered files save honi hain, e.g. `C:\cases\recovered`.
+  *Hint: output folder apne aap ban jayega.*
 
-1. Set the environment variables:
-   - `PURGENT_SUPABASE_URL`
-   - `PURGENT_SUPABASE_ANON_KEY`
-2. In **Reports & Compliance**, find the **Cloud sync (Supabase)** panel.
-3. Click **Enable sync** (once configured). A green `sync enabled` badge appears.
-4. Click **Sync now** to push pending report metadata immediately.
-5. Offline-first: if the network is down, local operations and reports complete normally; sync
-   retries later.
+- **Step 4:** **Begin recovery** click karo.
+  *Hint: scan mein time lag sakta hai — signatures dhundh ke files validate hongi.*
+
+- **Step 5:** Recovered files **Reports & Compliance** mein dekhlo — har file ka SHA-256 hash ke saath.
 
 ---
 
-## 8. CLI mode (no UI)
+## Feature 4 — Reports / Proof (PDF, XML)
 
-### List detected devices
-```
-cargo run --example list_devices
-```
+Har wipe/recover ka signed proof dekhna.
 
-### Wipe a temporary image end-to-end (safe demo)
-```
-cargo run --example wipe_demo <image-file> <standard> <operator-id>
-```
-Where `<standard>` is one of: `nist_clear` · `nist_purge` · `dod_3pass`.
+- **Step 1:** **Reports & Compliance** tab kholo.
+  *Hint: Certificate Vault table mein saari operations hain.*
 
-Example:
-```
-cargo run --example wipe_demo C:\temp\test.img nist_purge DFIR-OPR-40291
-```
-The CLI prints the exact target description — type it back to continue, or abort.
+- **Step 2:** Kisi row par **view** click karo — pura report kholta hai.
+  *Hint: `verified` = signature theek hai, `INVALID` = report ke saath chhed-chaad.*
 
-> Always test on a throwaway image file first. Never point destructive operations at a drive
-> whose contents you want to keep.
+- **Step 3:** **PDF** open karo, ya **Export XML certificate** click karke machine-readable copy save karo.
+  *Hint: ye report court/audit mein proof ke liye use hoti hai.*
 
 ---
 
-## Safety rules (from RULES.md)
-- You must have the legal right to erase/analyze the target.
-- Operator confirmation must **exactly match** the target phrase.
-- No silent fallback: hardware erase failure always requires explicit acknowledgement.
-- No scheduled/unattended wipes, no auto-confirm.
+## Optional — Cloud Sync (Supabase)
+
+- Environment variables set karo: `PURGENT_SUPABASE_URL` + `PURGENT_SUPABASE_ANON_KEY`.
+- Reports tab mein **Cloud sync (Supabase)** panel → **Enable sync** → **Sync now**.
+  *Hint: sirf report ka metadata sync hota hai — recovered file contents kabhi upload nahi hote.*
+
+---
+
+## Safety Note
+
+- Hamesha pehle **dummy image file** pe try karo, real drive pe nahi:
+  ```sh
+  cargo run --example wipe_demo C:\temp\test.img nist_clear DFIR-OPR-40291
+  ```
+- Jis drive/file ko erase kar rahe ho us par tumhara legal right hona chahiye.
+- Koi scheduled/unattended wipe nahi, koi auto-confirm nahi — har destructive kaam pe confirmation zaroori hai.
+
+*Hint: safe demo ke liye pehle ek chhoti saal image file bana lo (`12288` bytes, JPEG jaisa), phir us par wipe/recover try karo.*
