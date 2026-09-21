@@ -49,7 +49,7 @@ pub fn run_wipe_with_progress(
     let report = super::reporting::build_wipe_report(&result, signing_key);
     let (report_json_path, report_pdf_path) =
         super::reporting::save_report(&report, &report_dir.to_path_buf())
-            .map_err(|e| WipeError::Reporting(e))?;
+            .map_err(WipeError::Reporting)?;
     super::log::log(
         "reported",
         &format!(
@@ -85,7 +85,7 @@ pub fn run_erase_with_progress(
     let report = super::reporting::build_file_erase_report(&result, signing_key);
     let (report_json_path, report_pdf_path) =
         super::reporting::save_report(&report, &report_dir.to_path_buf())
-            .map_err(|e| EraseError::Irrecoverable(e))?;
+            .map_err(EraseError::Irrecoverable)?;
     super::log::log(
         "reported",
         &format!(
@@ -123,7 +123,7 @@ pub fn run_carve_with_progress(
     let report = super::reporting::build_recovery_report(&run, signing_key);
     let (report_json_path, report_pdf_path) =
         super::reporting::save_report(&report, &report_dir.to_path_buf())
-            .map_err(|e| CarveError::Destination(e))?;
+            .map_err(CarveError::Destination)?;
     super::log::log(
         "reported",
         &format!(

@@ -497,6 +497,7 @@ fn capture_evidence_hash(
     Ok(hex::encode(digest))
 }
 
+#[allow(clippy::too_many_arguments, reason = "byte-verified wipe-evidence worker: flat 1:1 spec->pass evidence plumbing surfaced byte-exact in corpus test; struct refactor would add an unverified indirection layer across wipe_with_spec/write_pass call sites(see Purgent_Gaps_Resolution_Plan).")]
 fn wipe_with_spec(
     file: &mut File,
     capacity: u64,
@@ -593,6 +594,7 @@ fn wipe_with_spec(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments, reason = "byte-verified wipe pass worker: flat 1:1 pass->sector evidence plumbing; refactor to a params struct would move the byte contract behind an unverified indirection(see plan).")]
 fn write_pass(
     file: &mut File,
     capacity: u64,

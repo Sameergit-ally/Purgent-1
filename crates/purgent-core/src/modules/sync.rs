@@ -102,7 +102,7 @@ impl AuditSyncClient {
         )
     }
 
-    fn headers<'a>(&'a self) -> Vec<(&'a str, String)> {
+    fn headers(&self) -> Vec<(&str, String)> {
         vec![
             ("apikey", self.config.anon_key.clone()),
             ("Authorization", format!("Bearer {}", self.config.anon_key)),

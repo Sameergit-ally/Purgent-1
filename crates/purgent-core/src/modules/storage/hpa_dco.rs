@@ -168,6 +168,7 @@ pub fn device_configuration_reset() -> AtaTaskFile {
 /// Outcome of an HPA/DCO removal attempt; surfaced in wipe reports.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct HpaDcoRemoval {
     pub attempted: bool,
     pub hpa_clear_sent: bool,
@@ -176,17 +177,6 @@ pub struct HpaDcoRemoval {
     pub detail: String,
 }
 
-impl Default for HpaDcoRemoval {
-    fn default() -> Self {
-        HpaDcoRemoval {
-            attempted: false,
-            hpa_clear_sent: false,
-            dco_reset_sent: false,
-            removed: false,
-            detail: String::new(),
-        }
-    }
-}
 
 impl AtaTaskFile {
     /// True when this task file issues SET MAX ADDRESS (28-bit) or
@@ -299,7 +289,7 @@ fn ata_identify(file: &std::fs::File) -> Option<[u8; 512]> {
 
 #[cfg(windows)]
 pub(crate) const IOCTL_ATA_PASS_THROUGH: u32 =
-    (0x0000_0004 << 16) | (0x03 << 14) | (0x040b << 2) | 0;
+    (0x0000_0004 << 16) | (0x03 << 14) | (0x040b << 2);
 
 #[cfg(windows)]
 // Windows ATA pass-through flags (WDK ntddscsi.h): DRDY_REQUIRED=0x01,
@@ -352,13 +342,9 @@ pub(crate) fn serialize_apt(apt: &AtaPassThroughEx, out: &mut [u8]) {
     off += 4;
     out[off..off + 4].copy_from_slice(&apt.DataBufferOffset.to_le_bytes());
     off += 4;
-    for i in 0..8 {
-        out[off + i] = apt.PreviousTaskFile[i];
-    }
+    out[off..off + 8].copy_from_slice(&apt.PreviousTaskFile);
     off += 8;
-    for i in 0..8 {
-        out[off + i] = apt.CurrentTaskFile[i];
-    }
+    out[off..off + 8].copy_from_slice(&apt.CurrentTaskFile);
 }
 
 #[cfg(windows)]
@@ -482,8 +468,7 @@ fn send_ata_passthrough(file: &std::fs::File, task: &AtaTaskFile) -> Result<u8, 
     // CurrentTaskFile[6] carries the device status register at byte header_size - 2.
     let status = buffer[header_size - 2];
     if status & 0x01 != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             format!(
                 "ATA taskfile command {:#04x} reported error status 0x{status:02X}",
                 task.current[7]

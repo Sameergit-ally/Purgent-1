@@ -193,12 +193,13 @@ pub fn carve_source_with_progress(
     })
 }
 
+pub(crate) type SignatureHit = Option<(&'static FileSignature, u64)>;
 fn find_next_signature(
     file: &mut File,
     signatures: &'static [FileSignature],
     from_offset: u64,
     source_len: u64,
-) -> Result<(Option<(&'static FileSignature, u64)>, u64), CarveError> {
+) -> Result<(SignatureHit, u64), CarveError> {
     let mut earliest: Option<(&'static FileSignature, u64)> = None;
     for sig in signatures {
         if let Some(pos) = search_forward(file, from_offset, source_len, sig.magic, true)? {
@@ -376,6 +377,7 @@ fn read_range(file: &mut File, offset: u64, len: u64) -> Result<Vec<u8>, CarveEr
     Ok(content)
 }
 
+#[allow(clippy::too_many_arguments, reason = "byte-verified carve evidence worker: flat 1:1 source->evidence plumbing (file/sig/offset/len/out) surfaces byte-exact in corpus test; a params-struct refactor would add an unverified indirection layer across write_recovered call sites (see Purgent_Gaps_Resolution_Plan.md).")]
 fn write_recovered(
     file: &mut File,
     sig: &FileSignature,

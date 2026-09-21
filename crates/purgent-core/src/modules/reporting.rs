@@ -14,6 +14,7 @@ use super::trace_scrubber::TraceScrubRecord;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Report {
     pub report_id: String,
     pub operation_type: String,
@@ -38,33 +39,6 @@ pub struct Report {
     pub signature: String,
 }
 
-impl Default for Report {
-    fn default() -> Self {
-        Report {
-            report_id: String::new(),
-            operation_type: String::new(),
-            operation_id: String::new(),
-            operator_id: String::new(),
-            target: String::new(),
-            standard_id: String::new(),
-            standard_label: String::new(),
-            capacity_bytes: 0,
-            start_time: String::new(),
-            finish_time: String::new(),
-            verification: None,
-            skipped_sector_count: 0,
-            method: None,
-            evidence_hash: None,
-            hpa_dco: None,
-            hpa_dco_removal: None,
-            trace_scrub: None,
-            categories: None,
-            report_hash: String::new(),
-            signature_alg: String::new(),
-            signature: String::new(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileCategoryCount {
@@ -293,7 +267,7 @@ pub fn export_xml(report: &Report) -> String {
     let mut buf = String::new();
     buf.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     buf.push_str("<purgent_report>\n");
-    buf.push_str(&tag("report_id", &format!("{}", report.report_id)));
+    buf.push_str(&tag("report_id", &report.report_id.to_string()));
     buf.push_str(&tag("operation_type", &report.operation_type));
     buf.push_str(&tag("operation_id", &report.operation_id));
     buf.push_str(&tag("operator_id", &report.operator_id));

@@ -396,11 +396,11 @@ fn widestr(s: &str) -> Vec<u16> {
 }
 
 fn read_wide_until_nul(bytes: &[u8]) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let mut units = Vec::new();
-    for chunk in bytes.chunks_exact(2) {
+    for chunk in bytes.as_chunks::<2>().0 {
         let unit = u16::from_ne_bytes([chunk[0], chunk[1]]);
         if unit == 0 {
             break;
