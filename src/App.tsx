@@ -154,7 +154,7 @@ function isHardwareStandard(id: string): boolean {
 }
 
 function App() {
-  const [viewMode, setViewMode] = useState<ViewMode>("showcase");
+  const [viewMode, setViewMode] = useState<ViewMode>("console");
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
   const [wipeStandards, setWipeStandards] = useState<StdInfo[]>([]);

@@ -38,7 +38,7 @@ fn main() {
     };
     let result = wipe_with_progress(request, &mut |_| {}).unwrap();
     let v = result.verification.as_ref().unwrap();
-    println!("PROBE-WIPE-ENGINE | status={:?} bytes_verified={} mismatched_sectors={} mismatched_bytes={}", v.status, v.bytes_verified, v.mismatched_sectors, v.mismatched_bytes);
+    println!("PROBE-WIPE-ENGINE | status={:?} bytes_verified={} mismatched_sectors={} mismatched_bytes={}", v.status, v.bytes_verified, v.mismatched_sectors);
     // INDEPENDENT: fresh File::open + read, count non-zero bytes + first offset
     let on_disk = std::fs::read(&path).unwrap();
     let nz: Vec<(usize, u8)> = on_disk
@@ -46,6 +46,7 @@ fn main() {
         .enumerate()
         .filter(|(_, &b)| b != 0)
         .take(6)
+        .map(|(i, &b)| (i, b))
         .collect();
     let nz_count = on_disk.iter().filter(|&&b| b != 0).count();
     println!(
